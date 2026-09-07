@@ -1,0 +1,54 @@
+# Ingestion tier cadence and skill run schedule for Trading-Scanner.
+# All times are in the timezone given per section unless noted otherwise.
+
+timezone: "America/Chicago"
+
+tiers:
+  # Tier 1 — polls repeatedly through the trading day, accumulates in
+  # news_sentiment rather than overwriting.
+  news_sentiment:
+    type: interval
+    interval_minutes: 30
+    start_time: "08:30"
+    end_time: "15:15"
+
+  # Tier 2 — each job runs once per day at its own time. Staggered so they
+  # don't all hit Alpha Vantage in the same second.
+  daily_reference:
+    type: daily
+    jobs:
+      insider_transactions: "07:00"
+      congress_trades: "07:05"
+      institutional_holdings: "07:10"
+      # Politician metadata is near-static reference data. Kept on a daily
+      # schedule for now for uniformity; the cheaper long-term version is
+      # "fetch once per bioguide_id, refresh only on a cache miss" —
+      # revisit once the daily call volume matters.
+      politician_metadata: "07:15"
+
+  # Tier 3 — not time-based. A watcher checks these triggers on the same
+  # cadence as news_sentiment; whichever fires first marks the symbol dirty
+  # and the next fundamentals job run picks it up.
+  fundamentals:
+    type: event
+    triggers:
+      - earnings_calendar_passed     # EARNINGS_CALENDAR date has passed since last snapshot
+      - news_topic: mergers_and_acquisitions   # Alpha Vantage NEWS_SENTIMENT topic tag
+      - new_8k_filing                 # material-event SEC filing detected
+
+  # Tier 4 — technical indicators, core OHLCV, index data, and the options
+  # chain are all pulled together on the same interval.
+  technical_core:
+    type: interval
+    interval_minutes: 15
+    market_hours_only: true
+    includes: [ohlcv, indicators, index, options]
+
+# When the two existing skills run against whatever is currently in the store.
+skills:
+  swing_trade_scanner:
+    # placeholder cadence — adjust to your actual routine
+    cron: "0 8,12,15 * * 1-5"
+  catalyst_confluence_scanner:
+    # matches the existing 9:45 AM / 2:45 PM CT run times
+    cron: "45 9,14 * * 1-5"
