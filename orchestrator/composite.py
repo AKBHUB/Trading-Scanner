@@ -13,7 +13,7 @@ silently treated as neutral (which would understate the real signal
 instead of just excluding it).
 """
 
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 
 from store.db import get_session
 from store.models import AgentSignal, FinalSignal
@@ -34,12 +34,12 @@ BULLISH_THRESHOLD = 0.15
 BEARISH_THRESHOLD = -0.15
 
 
-def _latest_signals(symbol: str) -> Dict[str, AgentSignal]:
+def _latest_signals(symbol: str, agent_names: Iterable[str]) -> Dict[str, AgentSignal]:
     """Latest AgentSignal row per agent name for `symbol`. An agent that
     has never run for this symbol is simply absent from the result."""
     latest: Dict[str, AgentSignal] = {}
     with get_session() as session:
-        for agent_name in AGENT_NAMES:
+        for agent_name in agent_names:
             row = (
                 session.query(AgentSignal)
                 .filter_by(symbol=symbol, agent_name=agent_name)
@@ -51,16 +51,25 @@ def _latest_signals(symbol: str) -> Dict[str, AgentSignal]:
     return latest
 
 
-def compute_composite(symbol: str, skill_name: str = "composite_orchestrator") -> Optional[FinalSignal]:
+def compute_composite(
+    symbol: str,
+    skill_name: str = "composite_orchestrator",
+    agent_names: Optional[Iterable[str]] = None,
+) -> Optional[FinalSignal]:
     """
     Reads each agent's latest stored signal for `symbol`, redistributes
     weight away from any agent that's missing or unavailable, computes the
     weighted composite, and persists + returns the resulting FinalSignal.
 
+    `agent_names` restricts which agents contribute (defaults to all four)
+    — a skill that only cares about e.g. technical + sentiment can pass
+    just those two rather than pulling in fundamental/macro noise.
+
     Returns None if no agent has a usable signal on record — nothing to
     combine yet (run the agents for this symbol first).
     """
-    signals = _latest_signals(symbol)
+    agent_names = list(agent_names) if agent_names is not None else AGENT_NAMES
+    signals = _latest_signals(symbol, agent_names)
     usable = {
         name: row
         for name, row in signals.items()

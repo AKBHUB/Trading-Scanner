@@ -234,29 +234,35 @@ with tab_run:
 # Signals — composite call per symbol, plus raw per-agent detail
 # ---------------------------------------------------------------------------
 with tab_signals:
-    st.subheader("Composite signal (latest per symbol)")
+    st.subheader("Composite signal (latest per symbol × skill)")
+    st.caption(
+        "swing_trade_scanner and catalyst_confluence_scanner run on their own "
+        "schedule (config/schedule.yaml); composite_orchestrator is whatever "
+        "you last triggered manually from Run Now — each is shown separately "
+        "per symbol rather than one hiding the others."
+    )
     with get_session() as session:
         final_rows = session.query(FinalSignal).order_by(FinalSignal.run_at.desc()).all()
 
-    latest_final_by_symbol = {}
+    latest_final_by_key = {}
     for row in final_rows:
-        latest_final_by_symbol.setdefault(row.symbol, row)
+        latest_final_by_key.setdefault((row.symbol, row.skill_name), row)
 
-    if not latest_final_by_symbol:
+    if not latest_final_by_key:
         st.info("No composite signals yet — use \"Run all agents + compute composite\" in the Run Now tab.")
     else:
         st.dataframe(
             [
                 {
                     "symbol": f.symbol,
+                    "skill": f.skill_name,
                     "direction": f.direction,
                     "confidence": round(f.confidence, 3),
                     "composite_score": round(f.composite_score, 3) if f.composite_score is not None else None,
                     "contributing_agents": f.contributing_agents,
-                    "skill": f.skill_name,
                     "run_at": f.run_at,
                 }
-                for f in latest_final_by_symbol.values()
+                for f in sorted(latest_final_by_key.values(), key=lambda f: (f.symbol, f.skill_name))
             ],
             use_container_width=True,
         )
