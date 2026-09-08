@@ -66,5 +66,5 @@ def analyze(symbol: str) -> None:
     try:
         result = call_claude(SYSTEM_PROMPT, summary)
         persist_signal(symbol, "sentiment", result)
-    except Exception:
-        persist_signal(symbol, "sentiment", None, available=False)
+    except Exception as e:
+        persist_signal(symbol, "sentiment", None, available=False, error=f"{type(e).__name__}: {e}")
