@@ -15,7 +15,7 @@ add it as a third check function here once that connector exists.
 from datetime import datetime
 from typing import Iterable
 
-from ingestion.alpha_vantage_client import call
+from ingestion.alpha_vantage_client import call, call_csv
 from store.db import get_session
 from store.models import CorporateActionFlag, Fundamentals, NewsSentiment
 
@@ -24,9 +24,8 @@ MA_TOPIC = "mergers_and_acquisitions"
 
 def check_earnings_calendar_trigger(symbols: Iterable[str]) -> None:
     """Flag any symbol whose stored fundamentals have passed their valid_until."""
-    data = call("EARNINGS_CALENDAR", horizon="3month")
-    rows = data.get("earningsCalendar") or data.get("data") or []
-    upcoming = {row["symbol"]: row.get("reportDate") for row in rows if "symbol" in row}
+    rows = call_csv("EARNINGS_CALENDAR", horizon="3month")
+    upcoming = {row["symbol"]: row.get("reportDate") for row in rows if row.get("symbol")}
 
     with get_session() as session:
         for symbol in symbols:

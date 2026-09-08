@@ -8,10 +8,12 @@ past the limit even when several jobs are due around the same time.
 """
 
 import collections
+import csv
+import io
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, List
 
 import requests
 
@@ -19,7 +21,16 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.alphavantage.co/query"
 API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY")
-RATE_LIMIT_PER_MINUTE = int(os.environ.get("ALPHA_VANTAGE_RATE_LIMIT_PER_MINUTE", "75"))
+
+_rate_limit_raw = os.environ.get("ALPHA_VANTAGE_RATE_LIMIT_PER_MINUTE", "75")
+try:
+    RATE_LIMIT_PER_MINUTE = int(_rate_limit_raw)
+except ValueError:
+    raise RuntimeError(
+        f"ALPHA_VANTAGE_RATE_LIMIT_PER_MINUTE must be a number, got {_rate_limit_raw!r}. "
+        "Check you haven't accidentally set your API key on this variable instead of "
+        "ALPHA_VANTAGE_API_KEY."
+    )
 
 if not API_KEY:
     logger.warning("ALPHA_VANTAGE_API_KEY is not set — calls will fail.")
@@ -76,5 +87,37 @@ def call(function: str, *, max_retries: int = 3, **params: Any) -> dict:
             continue
 
         return data
+
+    raise AlphaVantageError(f"{function}: exhausted retries, still throttled")
+
+
+def call_csv(function: str, *, max_retries: int = 3, **params: Any) -> List[dict]:
+    """
+    Like call(), but for the handful of Alpha Vantage endpoints — currently
+    just EARNINGS_CALENDAR — that return CSV instead of JSON. Calling
+    .json() on one of these raises a confusing JSONDecodeError rather than
+    a clear error, so those endpoints must go through this function instead.
+    """
+    query = {"function": function, "apikey": API_KEY, **params}
+
+    for attempt in range(1, max_retries + 1):
+        _rate_limiter.wait_for_slot()
+        response = requests.get(BASE_URL, params=query, timeout=30)
+        response.raise_for_status()
+        text = response.text
+
+        # Alpha Vantage still returns throttle/error messages as JSON even
+        # on CSV endpoints — check for that before assuming a CSV body.
+        if text.lstrip().startswith("{"):
+            data = response.json()
+            if "Error Message" in data:
+                raise AlphaVantageError(f"{function}: {data['Error Message']}")
+            if "Note" in data or "Information" in data:
+                msg = data.get("Note") or data.get("Information")
+                logger.warning("%s throttled (attempt %d/%d): %s", function, attempt, max_retries, msg)
+                time.sleep(2 ** attempt)
+                continue
+
+        return list(csv.DictReader(io.StringIO(text)))
 
     raise AlphaVantageError(f"{function}: exhausted retries, still throttled")
