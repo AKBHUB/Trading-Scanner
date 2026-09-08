@@ -39,5 +39,5 @@ def analyze(symbol: str) -> None:
     try:
         result = call_claude(SYSTEM_PROMPT, summary)
         persist_signal(symbol, "technical", result)
-    except Exception:
-        persist_signal(symbol, "technical", None, available=False)
+    except Exception as e:
+        persist_signal(symbol, "technical", None, available=False, error=f"{type(e).__name__}: {e}")

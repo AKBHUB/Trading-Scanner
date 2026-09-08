@@ -76,7 +76,22 @@ def call_claude(system_prompt: str, data_summary: str) -> AgentResult:
     )
 
 
-def persist_signal(symbol: str, agent_name: str, result: Optional[AgentResult], available: bool = True) -> None:
+def persist_signal(
+    symbol: str,
+    agent_name: str,
+    result: Optional[AgentResult],
+    available: bool = True,
+    error: Optional[str] = None,
+) -> None:
+    """
+    `error` carries the actual exception (e.g. "RuntimeError: ANTHROPIC_API_KEY
+    is not set", a JSONDecodeError if Claude wraps its reply in a code fence,
+    an HTTPError on a bad key) into `rationale` when `result` is None. Every
+    agent's except block used to swallow this behind a generic "agent
+    unavailable this run" string, so an unavailable run gave no way to tell
+    a missing API key apart from no store data apart from a malformed
+    response — pass the real reason through instead.
+    """
     with get_session() as session:
         session.add(
             AgentSignal(
@@ -85,7 +100,7 @@ def persist_signal(symbol: str, agent_name: str, result: Optional[AgentResult], 
                 agent_name=agent_name,
                 direction=result.direction if result else "neutral",
                 confidence=result.confidence if result else 0.0,
-                rationale=result.rationale if result else "agent unavailable this run",
+                rationale=result.rationale if result else (error or "agent unavailable this run"),
                 key_signals=result.key_signals if result else [],
                 available=available,
             )
