@@ -66,8 +66,11 @@ _rate_limiter = RateLimiter(RATE_LIMIT_PER_MINUTE)
 def call(function: str, *, max_retries: int = 3, **params: Any) -> dict:
     """
     Call an Alpha Vantage `function` with the given params, respecting the
-    shared rate limiter. Retries with backoff when Alpha Vantage responds
-    with a "Note"/"Information" throttle message instead of a hard error.
+    shared rate limiter. Retries with backoff on a "Note" (Alpha Vantage's
+    genuine rate-limit message). An "Information" message is raised
+    immediately instead of retried — Alpha Vantage uses that key for things
+    like missing data entitlements (e.g. INDEX_DATA, REALTIME_OPTIONS),
+    which retrying will never fix.
     """
     query = {"function": function, "apikey": API_KEY, **params}
 
@@ -80,9 +83,11 @@ def call(function: str, *, max_retries: int = 3, **params: Any) -> dict:
         if "Error Message" in data:
             raise AlphaVantageError(f"{function}: {data['Error Message']}")
 
-        if "Note" in data or "Information" in data:
-            msg = data.get("Note") or data.get("Information")
-            logger.warning("%s throttled (attempt %d/%d): %s", function, attempt, max_retries, msg)
+        if "Information" in data:
+            raise AlphaVantageError(f"{function}: {data['Information']}")
+
+        if "Note" in data:
+            logger.warning("%s throttled (attempt %d/%d): %s", function, attempt, max_retries, data["Note"])
             time.sleep(2 ** attempt)
             continue
 
@@ -112,9 +117,10 @@ def call_csv(function: str, *, max_retries: int = 3, **params: Any) -> List[dict
             data = response.json()
             if "Error Message" in data:
                 raise AlphaVantageError(f"{function}: {data['Error Message']}")
-            if "Note" in data or "Information" in data:
-                msg = data.get("Note") or data.get("Information")
-                logger.warning("%s throttled (attempt %d/%d): %s", function, attempt, max_retries, msg)
+            if "Information" in data:
+                raise AlphaVantageError(f"{function}: {data['Information']}")
+            if "Note" in data:
+                logger.warning("%s throttled (attempt %d/%d): %s", function, attempt, max_retries, data["Note"])
                 time.sleep(2 ** attempt)
                 continue
 
