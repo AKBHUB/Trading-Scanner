@@ -31,7 +31,7 @@ from ingestion.scheduler import start_scheduler_background
 from orchestrator import composite
 from store.config_store import get_config, set_config
 from store.db import get_session, init_db
-from store.models import AgentSignal, CongressTrade, FinalSignal
+from store.models import AgentSignal, CongressTrade, FinalSignal, Fundamentals
 
 init_db()
 
@@ -53,7 +53,9 @@ with st.sidebar:
         next_run = job.next_run_time.strftime("%Y-%m-%d %H:%M %Z") if job.next_run_time else "—"
         st.caption(f"{job.func.__name__}: next run {next_run}")
 
-tab_config, tab_run, tab_signals = st.tabs(["Watchlist & Schedule", "Run Now", "Signals"])
+tab_config, tab_run, tab_fundamentals, tab_signals = st.tabs(
+    ["Watchlist & Schedule", "Run Now", "Fundamentals", "Signals"]
+)
 
 # ---------------------------------------------------------------------------
 # Watchlist & schedule
@@ -229,6 +231,64 @@ with tab_run:
                         f"(confidence {final.confidence:.2f}, score {final.composite_score:+.2f}) — see Signals tab."
                     )
                     st.json(final.contributing_agents)
+
+# ---------------------------------------------------------------------------
+# Fundamentals — yfinance-backed metrics, its own ticker list + quick refresh
+# ---------------------------------------------------------------------------
+with tab_fundamentals:
+    st.subheader("Fundamentals ticker list")
+    st.caption(
+        "Optional — separate from the main watchlist above. Leave empty to "
+        "have the fundamentals tier (event-triggered + weekly safety-net "
+        "refresh, config/schedule.yaml) just use the main watchlist instead."
+    )
+    fund_watchlist = get_config("fundamentals_watchlist", [])
+    fund_watchlist_text = st.text_area(
+        "Symbols (comma-separated)", value=", ".join(fund_watchlist), height=68, key="fund_watchlist_text"
+    )
+    if st.button("Save fundamentals ticker list"):
+        set_config("fundamentals_watchlist", [s.strip().upper() for s in fund_watchlist_text.split(",") if s.strip()])
+        st.success("Saved — takes effect on the next scheduled fundamentals run, no restart needed.")
+
+    effective_fund_watchlist = fund_watchlist or get_config("watchlist", [])
+    st.caption(
+        f"Effective list right now: {', '.join(effective_fund_watchlist) or '(empty — set a watchlist first)'}"
+    )
+
+    st.divider()
+    if st.button("Quick refresh", type="primary"):
+        if not effective_fund_watchlist:
+            st.warning("No tickers to refresh — set a fundamentals or main watchlist first.")
+        else:
+            with st.spinner(f"Fetching fundamentals for {len(effective_fund_watchlist)} symbol(s) via yfinance..."):
+                count = fundamentals.refresh_all(effective_fund_watchlist)
+            st.success(f"Refreshed {count} of {len(effective_fund_watchlist)} symbol(s).")
+
+    st.divider()
+    st.subheader("Latest fundamentals per symbol")
+    with get_session() as session:
+        rows = session.query(Fundamentals).order_by(Fundamentals.fetched_at.desc()).all()
+
+    latest_by_symbol = {}
+    for row in rows:
+        latest_by_symbol.setdefault(row.symbol, row)
+
+    if not latest_by_symbol:
+        st.info("No fundamentals fetched yet — use \"Quick refresh\" above.")
+    else:
+        st.dataframe(
+            [
+                {
+                    "symbol": f.symbol,
+                    **{k: v for k, v in (f.metrics or {}).items() if k != "Ticker"},
+                    "next_earnings": f.valid_until,
+                    "fetched_at": f.fetched_at,
+                    "dirty_reason": f.dirty_reason,
+                }
+                for f in sorted(latest_by_symbol.values(), key=lambda f: f.symbol)
+            ],
+            use_container_width=True,
+        )
 
 # ---------------------------------------------------------------------------
 # Signals — composite call per symbol, plus raw per-agent detail

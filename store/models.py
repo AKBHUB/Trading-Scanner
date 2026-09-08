@@ -116,10 +116,18 @@ class InstitutionalHolding(Base):
 # ---------------------------------------------------------------------------
 class Fundamentals(Base):
     """
-    One row per (symbol, fiscal_date_ending) snapshot. `valid_until` is the
-    next expected earnings date; `is_dirty` is flipped by the corporate-
-    action watcher (M&A news topic hit, new 8-K filing, etc.) to force an
-    early refresh regardless of `valid_until`.
+    One row per symbol snapshot. `valid_until` is the next expected
+    earnings date; `is_dirty` is flipped by the corporate-action watcher
+    (M&A news topic hit, new 8-K filing, etc.) to force an early refresh
+    regardless of `valid_until`.
+
+    Backed by yfinance (`Ticker.info`), not Alpha Vantage — `metrics` holds
+    the flattened dict (market cap, P/E, P/B, beta, dividend yield, revenue/
+    earnings growth, margins; see ingestion/fundamentals.py). The four
+    income_statement/balance_sheet/cash_flow/earnings columns are the old
+    Alpha-Vantage-shaped full statement payloads: no longer written by
+    anything, kept only so any already-deployed table doesn't need a
+    column drop, and safe to remove later once nothing's reading them.
     """
 
     __tablename__ = "fundamentals"
@@ -131,10 +139,11 @@ class Fundamentals(Base):
     valid_until = Column(DateTime, nullable=True)          # next expected earnings date
     is_dirty = Column(Boolean, nullable=False, default=False)
     dirty_reason = Column(String, nullable=True)            # e.g. "news:mergers_and_acquisitions", "filing:8-K"
-    income_statement = Column(JSON, nullable=True)
-    balance_sheet = Column(JSON, nullable=True)
-    cash_flow = Column(JSON, nullable=True)
-    earnings = Column(JSON, nullable=True)
+    metrics = Column(JSON, nullable=True)                   # yfinance Ticker.info, flattened — see ingestion/fundamentals.py
+    income_statement = Column(JSON, nullable=True)          # legacy Alpha Vantage field, unused going forward
+    balance_sheet = Column(JSON, nullable=True)              # legacy Alpha Vantage field, unused going forward
+    cash_flow = Column(JSON, nullable=True)                  # legacy Alpha Vantage field, unused going forward
+    earnings = Column(JSON, nullable=True)                   # legacy Alpha Vantage field, unused going forward
 
     __table_args__ = (Index("ix_fundamentals_symbol_latest", "symbol", "fetched_at"),)
 

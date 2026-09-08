@@ -57,6 +57,13 @@ def _index_watchlist():
     return get_config("index_watchlist", INDEX_WATCHLIST)
 
 
+def _fundamentals_watchlist():
+    """A dedicated ticker list for fundamentals refreshes (dashboard's
+    Fundamentals tab), falling back to the main watchlist if none is set —
+    so setting it is optional, not required."""
+    return get_config("fundamentals_watchlist", []) or _watchlist()
+
+
 def job_news_sentiment():
     window = CONFIG["tiers"]["news_sentiment"]
     if not news_sentiment.within_window(window["start_time"], window["end_time"], tz=CONFIG["timezone"]):
@@ -92,14 +99,19 @@ def job_institutional_holdings():
 
 
 def job_fundamentals_watch():
-    watchlist = _watchlist()
+    watchlist = _fundamentals_watchlist()
     fundamentals.check_earnings_calendar_trigger(watchlist)
     fundamentals.check_news_ma_trigger(watchlist, since=datetime.utcnow() - timedelta(hours=1))
     # new_8k_filing isn't wired up yet — that trigger comes from TradingView,
-    # not Alpha Vantage. Add a third check_* call here once that connector exists.
+    # not yfinance. Add a third check_* call here once that connector exists.
     count = fundamentals.refresh_flagged_symbols()
     if count:
         logger.info("fundamentals: refreshed %d flagged symbols", count)
+
+
+def job_fundamentals_weekly_refresh():
+    count = fundamentals.refresh_all(_fundamentals_watchlist())
+    logger.info("fundamentals: weekly refresh updated %d symbols", count)
 
 
 def job_technical_core():
@@ -141,6 +153,14 @@ def build_scheduler() -> BackgroundScheduler:
     # Fundamentals watcher runs on the same cadence as news_sentiment —
     # it's cheap since the M&A check reads the store, not the API.
     scheduler.add_job(job_fundamentals_watch, IntervalTrigger(minutes=news_cfg["interval_minutes"]))
+
+    weekly_cfg = CONFIG["tiers"]["fundamentals"].get("weekly_refresh")
+    if weekly_cfg:
+        hour, minute = weekly_cfg["time"].split(":")
+        scheduler.add_job(
+            job_fundamentals_weekly_refresh,
+            CronTrigger(day_of_week=weekly_cfg["day_of_week"], hour=int(hour), minute=int(minute)),
+        )
 
     tech_cfg = CONFIG["tiers"]["technical_core"]
     scheduler.add_job(job_technical_core, IntervalTrigger(minutes=tech_cfg["interval_minutes"]))
