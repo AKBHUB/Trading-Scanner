@@ -1,16 +1,29 @@
 """
-Entry point: wires the four ingestion tiers to APScheduler using the
-cadence defined in config/schedule.yaml.
+Wires the four ingestion tiers to APScheduler using the cadence defined
+in config/schedule.yaml.
 
-Run as a long-lived process:
-    python -m ingestion.scheduler
+Two ways to run this:
+
+1. Embedded — start_scheduler_background() runs it as a background
+   thread inside another process (frontend/app.py does this, so the
+   single Railway/Streamlit service both serves the dashboard and
+   drives ingestion). Idempotent: safe to call on every Streamlit
+   script rerun, only the first call actually starts anything.
+
+2. Standalone — `python -m ingestion.scheduler` runs it as its own
+   long-lived process, e.g. as a separate worker service.
+
+Both paths build the same jobs from the same config, so cadence
+behavior is identical either way.
 """
 
 import logging
+import threading
+import time
 from datetime import datetime, timedelta
 
 import yaml
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -33,7 +46,7 @@ INDEX_WATCHLIST = ["SPX", "NDX"]
 
 def job_news_sentiment():
     window = CONFIG["tiers"]["news_sentiment"]
-    if not news_sentiment.within_window(window["start_time"], window["end_time"]):
+    if not news_sentiment.within_window(window["start_time"], window["end_time"], tz=CONFIG["timezone"]):
         return
     count = news_sentiment.run(WATCHLIST)
     logger.info("news_sentiment: wrote %d rows", count)
@@ -87,9 +100,9 @@ def _cron_at(hhmm: str) -> CronTrigger:
     return CronTrigger(hour=int(hour), minute=int(minute))
 
 
-def main():
-    init_db()
-    scheduler = BlockingScheduler(timezone=CONFIG["timezone"])
+def build_scheduler() -> BackgroundScheduler:
+    """Construct a scheduler with every tier's job added, not yet started."""
+    scheduler = BackgroundScheduler(timezone=CONFIG["timezone"])
 
     news_cfg = CONFIG["tiers"]["news_sentiment"]
     scheduler.add_job(job_news_sentiment, IntervalTrigger(minutes=news_cfg["interval_minutes"]))
@@ -107,8 +120,42 @@ def main():
     tech_cfg = CONFIG["tiers"]["technical_core"]
     scheduler.add_job(job_technical_core, IntervalTrigger(minutes=tech_cfg["interval_minutes"]))
 
-    logger.info("Scheduler starting...")
+    return scheduler
+
+
+_lock = threading.Lock()
+_scheduler = None
+
+
+def start_scheduler_background() -> BackgroundScheduler:
+    """
+    Idempotent: builds and starts the scheduler at most once per process.
+    Safe to call from frontend/app.py on every Streamlit script rerun —
+    subsequent calls just return the already-running instance.
+    """
+    global _scheduler
+    with _lock:
+        if _scheduler is not None:
+            return _scheduler
+        init_db()
+        _scheduler = build_scheduler()
+        _scheduler.start()
+        logger.info("Scheduler started in background thread (jobs: %s)", [j.id for j in _scheduler.get_jobs()])
+        return _scheduler
+
+
+def main():
+    """Standalone entry point: `python -m ingestion.scheduler` runs this
+    as its own long-lived process (e.g. a separate worker service)."""
+    init_db()
+    scheduler = build_scheduler()
     scheduler.start()
+    logger.info("Scheduler starting (standalone)...")
+    try:
+        while True:
+            time.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        scheduler.shutdown()
 
 
 if __name__ == "__main__":
