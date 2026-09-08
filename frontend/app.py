@@ -27,14 +27,30 @@ import streamlit as st
 
 from agents import fundamental, macro, sentiment, technical
 from ingestion import daily_reference, fundamentals, news_sentiment, technical_core
+from ingestion.scheduler import start_scheduler_background
 from store.config_store import get_config, set_config
 from store.db import get_session, init_db
 from store.models import AgentSignal, CongressTrade
 
 init_db()
 
+# Starts the APScheduler loop in a background thread of this same process,
+# so this one Streamlit service both serves the dashboard and drives
+# scheduled ingestion — no separate worker process to deploy. Idempotent:
+# Streamlit reruns this whole script on every interaction, but the second
+# call onward just returns the already-running scheduler instance.
+_scheduler = start_scheduler_background()
+
 st.set_page_config(page_title="Trading-Scanner", layout="wide")
 st.title("Trading-Scanner")
+
+with st.sidebar:
+    st.caption("Scheduler")
+    st.success("Running" if _scheduler.running else "Stopped")
+    jobs = sorted(_scheduler.get_jobs(), key=lambda j: j.next_run_time or datetime.max)
+    for job in jobs:
+        next_run = job.next_run_time.strftime("%Y-%m-%d %H:%M %Z") if job.next_run_time else "—"
+        st.caption(f"{job.func.__name__}: next run {next_run}")
 
 tab_config, tab_run, tab_signals = st.tabs(["Watchlist & Schedule", "Run Now", "Recent Signals"])
 

@@ -9,16 +9,19 @@ sentiment timeline, not just the latest snapshot.
 
 from datetime import datetime, time as dt_time
 from typing import Iterable, Optional
+from zoneinfo import ZoneInfo
 
 from ingestion.alpha_vantage_client import call
 from store.db import get_session
 from store.models import NewsSentiment
 
 
-def within_window(start_time: str, end_time: str, now: Optional[datetime] = None) -> bool:
-    """start_time/end_time are 'HH:MM' strings. Used by the scheduler to
-    decide whether this job should actually run right now."""
-    now = now or datetime.now()
+def within_window(start_time: str, end_time: str, now: Optional[datetime] = None, tz: str = "America/Chicago") -> bool:
+    """start_time/end_time are 'HH:MM' strings, evaluated in `tz` (defaults to
+    the config timezone) rather than the server's local time — on Railway
+    the container clock is UTC, so comparing against a naive datetime.now()
+    made this window wrong by several hours."""
+    now = now or datetime.now(ZoneInfo(tz))
     start = dt_time.fromisoformat(start_time)
     end = dt_time.fromisoformat(end_time)
     return start <= now.time() <= end
