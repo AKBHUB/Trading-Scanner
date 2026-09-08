@@ -28,6 +28,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from ingestion import daily_reference, fundamentals, news_sentiment, technical_core
+from skills import catalyst_confluence_scanner, swing_trade_scanner
+from store.config_store import get_config
 from store.db import get_session, init_db
 from store.models import CongressTrade
 
@@ -37,28 +39,39 @@ logger = logging.getLogger(__name__)
 with open("config/schedule.yaml") as f:
     CONFIG = yaml.safe_load(f)
 
-# TODO: replace with your actual scan universe — ideally shared with
-# swing-trade-scanner / catalyst-confluence-scanner's candidate lists
-# rather than a separate hardcoded list.
+# Fallback only — the dashboard's saved watchlist (store/config_store.py,
+# same app_config table the "Watchlist & Schedule" tab writes to) is what
+# every job below actually reads at call time, via _watchlist() /
+# _index_watchlist(). Previously these jobs read this hardcoded constant
+# directly, so saving a new watchlist in the dashboard never reached the
+# scheduled jobs — only the dashboard's own manual "Run Now" buttons.
 WATCHLIST = ["AAPL", "MSFT", "NVDA"]
 INDEX_WATCHLIST = ["SPX", "NDX"]
+
+
+def _watchlist():
+    return get_config("watchlist", WATCHLIST)
+
+
+def _index_watchlist():
+    return get_config("index_watchlist", INDEX_WATCHLIST)
 
 
 def job_news_sentiment():
     window = CONFIG["tiers"]["news_sentiment"]
     if not news_sentiment.within_window(window["start_time"], window["end_time"], tz=CONFIG["timezone"]):
         return
-    count = news_sentiment.run(WATCHLIST)
+    count = news_sentiment.run(_watchlist())
     logger.info("news_sentiment: wrote %d rows", count)
 
 
 def job_insider_transactions():
-    count = daily_reference.run_insider_transactions(WATCHLIST)
+    count = daily_reference.run_insider_transactions(_watchlist())
     logger.info("insider_transactions: wrote %d rows", count)
 
 
 def job_congress_trades():
-    count = daily_reference.run_congress_trades(WATCHLIST)
+    count = daily_reference.run_congress_trades(_watchlist())
     logger.info("congress_trades: wrote %d rows", count)
 
 
@@ -74,13 +87,14 @@ def job_politician_metadata():
 
 
 def job_institutional_holdings():
-    count = daily_reference.run_institutional_holdings(WATCHLIST)
+    count = daily_reference.run_institutional_holdings(_watchlist())
     logger.info("institutional_holdings: wrote %d rows", count)
 
 
 def job_fundamentals_watch():
-    fundamentals.check_earnings_calendar_trigger(WATCHLIST)
-    fundamentals.check_news_ma_trigger(WATCHLIST, since=datetime.utcnow() - timedelta(hours=1))
+    watchlist = _watchlist()
+    fundamentals.check_earnings_calendar_trigger(watchlist)
+    fundamentals.check_news_ma_trigger(watchlist, since=datetime.utcnow() - timedelta(hours=1))
     # new_8k_filing isn't wired up yet — that trigger comes from TradingView,
     # not Alpha Vantage. Add a third check_* call here once that connector exists.
     count = fundamentals.refresh_flagged_symbols()
@@ -89,10 +103,21 @@ def job_fundamentals_watch():
 
 
 def job_technical_core():
-    technical_core.run_technical(WATCHLIST)
-    technical_core.run_index_data(INDEX_WATCHLIST)
-    technical_core.run_options(WATCHLIST)
+    watchlist = _watchlist()
+    technical_core.run_technical(watchlist)
+    technical_core.run_index_data(_index_watchlist())
+    technical_core.run_options(watchlist)
     logger.info("technical_core: tier run complete")
+
+
+def job_swing_trade_scanner():
+    count = swing_trade_scanner.run(_watchlist())
+    logger.info("swing_trade_scanner: scored %d symbols", count)
+
+
+def job_catalyst_confluence_scanner():
+    count = catalyst_confluence_scanner.run(_watchlist())
+    logger.info("catalyst_confluence_scanner: scored %d symbols", count)
 
 
 def _cron_at(hhmm: str) -> CronTrigger:
@@ -119,6 +144,18 @@ def build_scheduler() -> BackgroundScheduler:
 
     tech_cfg = CONFIG["tiers"]["technical_core"]
     scheduler.add_job(job_technical_core, IntervalTrigger(minutes=tech_cfg["interval_minutes"]))
+
+    skills_cfg = CONFIG.get("skills", {})
+    if "swing_trade_scanner" in skills_cfg:
+        scheduler.add_job(
+            job_swing_trade_scanner,
+            CronTrigger.from_crontab(skills_cfg["swing_trade_scanner"]["cron"], timezone=CONFIG["timezone"]),
+        )
+    if "catalyst_confluence_scanner" in skills_cfg:
+        scheduler.add_job(
+            job_catalyst_confluence_scanner,
+            CronTrigger.from_crontab(skills_cfg["catalyst_confluence_scanner"]["cron"], timezone=CONFIG["timezone"]),
+        )
 
     return scheduler
 
