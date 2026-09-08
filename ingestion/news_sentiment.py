@@ -15,6 +15,29 @@ from ingestion.alpha_vantage_client import call
 from store.db import get_session
 from store.models import NewsSentiment
 
+# Every topic Alpha Vantage's NEWS_SENTIMENT supports. Used as the fallback
+# when there's no watchlist to scope by — a topics= pull instead of tickers=,
+# so an empty watchlist still gets broad, relevant news rather than nothing.
+ALL_NEWS_TOPICS = [
+    "mergers_and_acquisitions",
+    "financial_markets",
+    "economy_fiscal",
+    "economy_monetary",
+    "economy_macro",
+    "energy_transportation",
+    "finance",
+    "life_sciences",
+    "manufacturing",
+    "real_estate",
+    "retail_wholesale",
+    "technology",
+]
+
+DEFAULT_LIMIT = 50
+# Topic mode covers the whole market rather than a handful of tickers, so
+# pull more per call to get reasonable breadth out of the one request.
+TOPIC_MODE_LIMIT = 200
+
 
 def within_window(start_time: str, end_time: str, now: Optional[datetime] = None, tz: str = "America/Chicago") -> bool:
     """start_time/end_time are 'HH:MM' strings, evaluated in `tz` (defaults to
@@ -27,15 +50,30 @@ def within_window(start_time: str, end_time: str, now: Optional[datetime] = None
     return start <= now.time() <= end
 
 
-def fetch_news_sentiment(symbols: Iterable[str], limit: int = 50) -> list:
-    """One Alpha Vantage call covers every symbol via a comma-separated tickers param."""
-    tickers = ",".join(symbols)
-    data = call("NEWS_SENTIMENT", tickers=tickers, limit=limit)
+def fetch_news_sentiment(symbols: Iterable[str], limit: int = DEFAULT_LIMIT) -> list:
+    """
+    Ticker-scoped when `symbols` is non-empty (one call, comma-separated
+    tickers param). With no symbols — no watchlist saved — falls back to a
+    topics= pull across every supported NEWS_SENTIMENT topic instead of
+    silently fetching nothing.
+    """
+    symbols = list(symbols)
+    if symbols:
+        data = call("NEWS_SENTIMENT", tickers=",".join(symbols), limit=limit)
+    else:
+        data = call("NEWS_SENTIMENT", topics=",".join(ALL_NEWS_TOPICS), limit=max(limit, TOPIC_MODE_LIMIT))
     return data.get("feed", [])
 
 
 def run(symbols: Iterable[str]) -> int:
-    """Fetch and persist news/sentiment for `symbols`. Returns rows written."""
+    """
+    Fetch and persist news/sentiment. Returns rows written.
+
+    With a watchlist, writes one row per (article, symbol) restricted to
+    those symbols. With no watchlist, pulls topic-wide market news instead
+    and writes one row per (article, symbol) for every ticker Alpha Vantage
+    tagged the article with — there's no watchlist left to filter against.
+    """
     symbols = set(symbols)
     feed = fetch_news_sentiment(symbols)
     written = 0
@@ -49,7 +87,9 @@ def run(symbols: Iterable[str]) -> int:
             # write one row per (article, symbol) so scores stay symbol-specific.
             for ticker_sentiment in item.get("ticker_sentiment", []):
                 symbol = ticker_sentiment.get("ticker")
-                if symbol not in symbols:
+                if not symbol:
+                    continue
+                if symbols and symbol not in symbols:
                     continue
                 session.add(
                     NewsSentiment(
