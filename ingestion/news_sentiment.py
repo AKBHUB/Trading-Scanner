@@ -15,9 +15,11 @@ from ingestion.alpha_vantage_client import call
 from store.db import get_session
 from store.models import NewsSentiment
 
-# Every topic Alpha Vantage's NEWS_SENTIMENT supports. Used as the fallback
-# when there's no watchlist to scope by — a topics= pull instead of tickers=,
-# so an empty watchlist still gets broad, relevant news rather than nothing.
+# Every topic Alpha Vantage's NEWS_SENTIMENT supports — not used to filter
+# the fallback call (see fetch_news_sentiment for why), but kept here as a
+# reference for anything that wants to filter the *stored* topics column,
+# e.g. fundamentals.check_news_ma_trigger already does this against
+# NewsSentiment.topics after the fact.
 ALL_NEWS_TOPICS = [
     "mergers_and_acquisitions",
     "financial_markets",
@@ -34,8 +36,8 @@ ALL_NEWS_TOPICS = [
 ]
 
 DEFAULT_LIMIT = 50
-# Topic mode covers the whole market rather than a handful of tickers, so
-# pull more per call to get reasonable breadth out of the one request.
+# The market-wide fallback below has no tickers to narrow it, so pull more
+# per call to get reasonable breadth out of the one request.
 TOPIC_MODE_LIMIT = 200
 
 
@@ -53,15 +55,25 @@ def within_window(start_time: str, end_time: str, now: Optional[datetime] = None
 def fetch_news_sentiment(symbols: Iterable[str], limit: int = DEFAULT_LIMIT) -> list:
     """
     Ticker-scoped when `symbols` is non-empty (one call, comma-separated
-    tickers param). With no symbols — no watchlist saved — falls back to a
-    topics= pull across every supported NEWS_SENTIMENT topic instead of
-    silently fetching nothing.
+    tickers param). With no symbols — no watchlist saved — falls back to
+    Alpha Vantage's general top-financial-news feed instead of silently
+    fetching nothing.
+
+    NOT topics=<all 12 topics>: verified against the live API that
+    Alpha Vantage ANDs multiple topics rather than ORing them, the same
+    way multiple tickers OR — so a comma-separated list of unrelated
+    topics (M&A + fiscal policy + energy/transportation, say) matches no
+    article and always returns an empty feed. Omitting both tickers and
+    topics gets the real general feed instead, at the same cost (one
+    call). Each article still carries its own topics array, which is
+    stored per row below, so anything filtering on NewsSentiment.topics
+    downstream (e.g. fundamentals.check_news_ma_trigger) is unaffected.
     """
     symbols = list(symbols)
     if symbols:
         data = call("NEWS_SENTIMENT", tickers=",".join(symbols), limit=limit)
     else:
-        data = call("NEWS_SENTIMENT", topics=",".join(ALL_NEWS_TOPICS), limit=max(limit, TOPIC_MODE_LIMIT))
+        data = call("NEWS_SENTIMENT", limit=max(limit, TOPIC_MODE_LIMIT))
     return data.get("feed", [])
 
 
@@ -70,7 +82,7 @@ def run(symbols: Iterable[str]) -> int:
     Fetch and persist news/sentiment. Returns rows written.
 
     With a watchlist, writes one row per (article, symbol) restricted to
-    those symbols. With no watchlist, pulls topic-wide market news instead
+    those symbols. With no watchlist, pulls the general market feed instead
     and writes one row per (article, symbol) for every ticker Alpha Vantage
     tagged the article with — there's no watchlist left to filter against.
     """
