@@ -28,13 +28,19 @@ tiers:
 
   # Tier 3 — not time-based. A watcher checks these triggers on the same
   # cadence as news_sentiment; whichever fires first marks the symbol dirty
-  # and the next fundamentals job run picks it up.
+  # and the next fundamentals job run picks it up. Backed by yfinance, not
+  # Alpha Vantage. A weekly force-refresh runs independently as a safety
+  # net for anything the event triggers missed (e.g. yfinance's earnings
+  # date was temporarily unavailable for a ticker).
   fundamentals:
     type: event
     triggers:
-      - earnings_calendar_passed     # EARNINGS_CALENDAR date has passed since last snapshot
-      - news_topic: mergers_and_acquisitions   # Alpha Vantage NEWS_SENTIMENT topic tag
+      - earnings_calendar_passed     # yfinance's next expected earnings date has passed since last snapshot
+      - news_topic: mergers_and_acquisitions   # Alpha Vantage NEWS_SENTIMENT topic tag (Tier 1 still uses Alpha Vantage)
       - new_8k_filing                 # material-event SEC filing detected
+    weekly_refresh:
+      day_of_week: "mon"
+      time: "06:00"
 
   # Tier 4 — technical indicators, core OHLCV, index data, and the options
   # chain are all pulled together on the same interval.
