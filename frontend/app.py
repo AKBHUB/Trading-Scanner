@@ -12,6 +12,15 @@ On Railway, this is the "web" service; ingestion/scheduler.py runs as
 a separate "worker" service, both pointed at the same DATABASE_URL.
 """
 
+import os
+import sys
+
+# Streamlit executes this file directly, which puts frontend/ on
+# sys.path instead of the repo root — add the repo root explicitly so
+# the store/ingestion/agents packages import correctly regardless of
+# the container's working directory.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from datetime import datetime, timedelta
 
 import streamlit as st
