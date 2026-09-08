@@ -22,7 +22,14 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./trading_scanner.db")
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args, future=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+# expire_on_commit=False: every agent (agents/technical.py etc.) queries
+# inside `with get_session() as session:` but reads the returned row's
+# attributes *after* that block exits — which commits and, by default,
+# expires every object so the next attribute access re-queries using a
+# now-closed session. That raised DetachedInstanceError on every agent
+# run. With expire_on_commit=False, objects keep their already-loaded
+# values after commit/close instead of trying to refresh from the DB.
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True, expire_on_commit=False)
 
 
 def init_db() -> None:

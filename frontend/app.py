@@ -178,22 +178,36 @@ with tab_run:
     symbol = st.selectbox("Symbol", watchlist) if watchlist else st.text_input("Symbol")
 
     a1, a2, a3, a4 = st.columns(4)
-    if symbol and a1.button("Run technical agent"):
-        with st.spinner(f"Analyzing {symbol}..."):
-            technical.analyze(symbol)
-        st.success("Done — see Recent Signals tab.")
-    if symbol and a2.button("Run fundamental agent"):
-        with st.spinner(f"Analyzing {symbol}..."):
-            fundamental.analyze(symbol)
-        st.success("Done — see Recent Signals tab.")
-    if symbol and a3.button("Run sentiment agent"):
-        with st.spinner(f"Analyzing {symbol}..."):
-            sentiment.analyze(symbol)
-        st.success("Done — see Recent Signals tab.")
-    if symbol and a4.button("Run macro agent"):
-        with st.spinner(f"Analyzing {symbol}..."):
-            macro.analyze(symbol, index_watchlist)
-        st.success("Done — see Recent Signals tab.")
+    # Buttons must always render regardless of whether `symbol` is set —
+    # `if symbol and a1.button(...)` short-circuited and skipped calling
+    # a1.button() entirely whenever symbol was empty (no watchlist saved,
+    # nothing typed yet), which made the buttons vanish from the page
+    # rather than just being unusable. Render unconditionally; check
+    # `symbol` only when deciding whether a click should do anything.
+    run_technical = a1.button("Run technical agent")
+    run_fundamental = a2.button("Run fundamental agent")
+    run_sentiment = a3.button("Run sentiment agent")
+    run_macro = a4.button("Run macro agent")
+
+    if (run_technical or run_fundamental or run_sentiment or run_macro) and not symbol:
+        st.warning("Enter or select a symbol above first.")
+    else:
+        if run_technical:
+            with st.spinner(f"Analyzing {symbol}..."):
+                technical.analyze(symbol)
+            st.success("Done — see Recent Signals tab.")
+        if run_fundamental:
+            with st.spinner(f"Analyzing {symbol}..."):
+                fundamental.analyze(symbol)
+            st.success("Done — see Recent Signals tab.")
+        if run_sentiment:
+            with st.spinner(f"Analyzing {symbol}..."):
+                sentiment.analyze(symbol)
+            st.success("Done — see Recent Signals tab.")
+        if run_macro:
+            with st.spinner(f"Analyzing {symbol}..."):
+                macro.analyze(symbol, index_watchlist)
+            st.success("Done — see Recent Signals tab.")
 
 # ---------------------------------------------------------------------------
 # Recent signals
