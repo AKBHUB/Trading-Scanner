@@ -12,6 +12,13 @@ from store.models import IndexSnapshot, OptionSnapshot, TechnicalSnapshot
 # Matches the indicators already used by swing-trade-scanner's 17-point rubric.
 INDICATOR_FUNCTIONS = ["RSI", "MACD", "EMA", "SMA", "BBANDS", "OBV", "ADX"]
 
+# Alpha Vantage requires different parameter sets per indicator function —
+# time_period and series_type aren't universal, so each is only sent to the
+# functions that actually accept it (sending it to ones that don't causes
+# "Invalid API call" errors, as BBANDS did here).
+_NEEDS_TIME_PERIOD = {"RSI", "EMA", "SMA", "BBANDS", "ADX"}
+_NEEDS_SERIES_TYPE = {"RSI", "EMA", "SMA", "BBANDS", "MACD"}
+
 
 def fetch_ohlcv(symbol: str, interval: str = "15min") -> dict:
     return call("TIME_SERIES_INTRADAY", symbol=symbol, interval=interval, outputsize="compact")
@@ -20,9 +27,11 @@ def fetch_ohlcv(symbol: str, interval: str = "15min") -> dict:
 def fetch_indicators(symbol: str, interval: str = "15min") -> dict:
     indicators = {}
     for function in INDICATOR_FUNCTIONS:
-        params = {"symbol": symbol, "interval": interval, "series_type": "close"}
-        if function in ("RSI", "EMA", "SMA"):
+        params = {"symbol": symbol, "interval": interval}
+        if function in _NEEDS_TIME_PERIOD:
             params["time_period"] = 14
+        if function in _NEEDS_SERIES_TYPE:
+            params["series_type"] = "close"
         indicators[function] = call(function, **params)
     return indicators
 
