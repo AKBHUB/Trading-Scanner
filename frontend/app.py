@@ -131,7 +131,14 @@ with tab_run:
     st.subheader("Ingestion tiers")
     watchlist = get_config("watchlist", [])
     index_watchlist = get_config("index_watchlist", [])
-    st.caption(f"Current watchlist: {', '.join(watchlist) or '(empty — set one in the Watchlist tab)'}")
+    if watchlist:
+        st.caption(f"Current watchlist: {', '.join(watchlist)}")
+    else:
+        st.caption(
+            "No watchlist saved — news & sentiment will pull broad market news "
+            "by topic instead of per-ticker; the other tiers below need an "
+            "actual watchlist and will write nothing until you set one."
+        )
 
     c1, c2, c3, c4 = st.columns(4)
     if c1.button("Run news & sentiment"):
