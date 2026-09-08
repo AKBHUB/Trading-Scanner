@@ -135,9 +135,10 @@ with tab_run:
         st.caption(f"Current watchlist: {', '.join(watchlist)}")
     else:
         st.caption(
-            "No watchlist saved — news & sentiment will pull broad market news "
-            "by topic instead of per-ticker; the other tiers below need an "
-            "actual watchlist and will write nothing until you set one."
+            "No watchlist saved — news & sentiment will pull Alpha Vantage's "
+            "general top-financial-news feed instead of per-ticker; the other "
+            "tiers below need an actual watchlist and will write nothing until "
+            "you set one."
         )
 
     c1, c2, c3, c4 = st.columns(4)
