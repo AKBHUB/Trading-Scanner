@@ -28,8 +28,9 @@ exists.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, Optional
 
+import pandas as pd
 import yfinance as yf
 
 from store.db import get_session
@@ -40,7 +41,9 @@ logger = logging.getLogger(__name__)
 MA_TOPIC = "mergers_and_acquisitions"
 
 # yfinance Ticker.info key -> flattened column label, matching the metrics
-# actually needed for fundamental analysis (not full statements).
+# actually needed for fundamental analysis (not full statements). Growth
+# rates for Free Cash Flow and EPS aren't single-snapshot .info fields —
+# see _yoy_growth() below, computed separately from quarterly history.
 METRIC_FIELDS = {
     "Market Capitalization": "marketCap",
     "Trailing P/E": "trailingPE",
@@ -57,17 +60,146 @@ METRIC_FIELDS = {
     "Free Cash Flow": "freeCashflow",
 }
 
+# The five factors the fundamental health score ranks on, and where each
+# one lives in the metrics dict built below. Equal-weighted by default;
+# a factor missing for a given symbol (e.g. no quarterly cash flow history
+# yet) is excluded and the rest renormalized, same redistribution pattern
+# as orchestrator/composite.py uses for a missing agent.
+HEALTH_SCORE_FACTORS = [
+    "Free Cash Flow Growth (YoY)",
+    "EPS Growth (YoY)",
+    "Revenue Growth (YoY)",
+    "Quarterly Earnings Growth (YoY)",
+    "Forward P/E Decline (%)",
+]
 
-def fetch_fundamental_metrics(symbol: str) -> Dict[str, Any]:
-    """One yfinance call (`Ticker.info`) per symbol. Unlike Alpha Vantage's
-    EARNINGS_CALENDAR, yfinance has no multi-ticker batch endpoint, so this
-    can't be combined across symbols the way Tier 1's NEWS_SENTIMENT call is."""
-    ticker = yf.Ticker(symbol)
+# Same neutral-band convention as NewsSentiment's sentiment_score_definition
+# and orchestrator/composite.py's bullish/bearish thresholds, extended to a
+# 5-tier rank since "how strong or healthy" calls for more than a 3-way
+# split.
+_HEALTH_RANK_BANDS = [
+    (0.35, "Strong"),
+    (0.15, "Somewhat Strong"),
+    (-0.15, "Neutral"),
+    (-0.35, "Somewhat Weak"),
+]
+
+
+def _yoy_growth(series: "pd.Series") -> Optional[float]:
+    """
+    Given a time series indexed by period-end date (most recent first —
+    yfinance's own convention for quarterly_cashflow columns and
+    get_earnings_dates() rows), return the fractional YoY growth between
+    the latest value and whichever earlier entry falls closest to exactly
+    one year before it. Returns None if there's under a year of history,
+    the closest match is more than ~2 months off target (too sparse a
+    history to trust as "a year ago"), or the prior value is zero.
+    """
+    series = series.dropna()
+    if len(series) < 2:
+        return None
+    latest_date, latest_val = series.index[0], series.iloc[0]
+    target = latest_date - pd.DateOffset(years=1)
+    closest = min(series.index[1:], key=lambda d: abs((d - target).days))
+    if abs((closest - target).days) > 60:
+        return None
+    prior_val = series.loc[closest]
+    if not prior_val:
+        return None
+    return (latest_val - prior_val) / abs(prior_val)
+
+
+def _fcf_growth_yoy(ticker: "yf.Ticker") -> Optional[float]:
+    try:
+        qcf = ticker.quarterly_cashflow
+        if qcf is None or "Free Cash Flow" not in qcf.index:
+            return None
+        return _yoy_growth(qcf.loc["Free Cash Flow"])
+    except Exception as e:
+        logger.debug("quarterly_cashflow failed: %s: %s", type(e).__name__, e)
+        return None
+
+
+def _eps_growth_yoy(ticker: "yf.Ticker") -> Optional[float]:
+    try:
+        earnings_dates = ticker.get_earnings_dates(limit=8)
+        if earnings_dates is None or "Reported EPS" not in earnings_dates.columns:
+            return None
+        return _yoy_growth(earnings_dates["Reported EPS"])
+    except Exception as e:
+        logger.debug("get_earnings_dates() failed: %s: %s", type(e).__name__, e)
+        return None
+
+
+def _forward_pe_decline(metrics: Dict[str, Any]) -> Optional[float]:
+    """Fraction by which forward P/E sits below trailing P/E — a positive
+    value means the market is pricing in enough earnings growth to compress
+    the multiple even as the price holds (cheaper on a forward basis, all
+    else equal); negative means the opposite. Needs no extra fetch — both
+    P/E values are already in `metrics` from Ticker.info."""
+    trailing, forward = metrics.get("Trailing P/E"), metrics.get("Forward P/E")
+    if not trailing or forward is None:
+        return None
+    return (trailing - forward) / trailing
+
+
+def compute_health_score(metrics: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Equal-weighted average of the five HEALTH_SCORE_FACTORS already present
+    in `metrics` (Free Cash Flow Growth, EPS Growth, Revenue Growth,
+    Quarterly Earnings Growth, Forward P/E Decline), redistributing weight
+    away from whichever factors are missing rather than treating them as
+    zero. Returns None if every factor is missing — nothing to score.
+    """
+    available = {name: metrics[name] for name in HEALTH_SCORE_FACTORS if metrics.get(name) is not None}
+    if not available:
+        return None
+
+    score = sum(available.values()) / len(available)
+    rank = next((label for threshold, label in _HEALTH_RANK_BANDS if score >= threshold), "Weak")
+
+    return {"score": score, "rank": rank, "factors_used": list(available.keys())}
+
+
+def _build_metrics(ticker: "yf.Ticker", symbol: str) -> Dict[str, Any]:
+    """
+    The full metrics dict for one symbol, given an already-constructed
+    Ticker: everything in METRIC_FIELDS from Ticker.info, plus the two
+    growth rates that need separate historical calls (Free Cash Flow
+    Growth, EPS Growth), plus the derived Forward P/E Decline, plus the
+    resulting fundamental health score/rank (Fundamental Health Score /
+    Fundamental Health Rank) — see compute_health_score(). Takes a Ticker
+    rather than a symbol so callers that also need e.g. _next_earnings_date
+    can share one instance — yfinance caches each property per instance,
+    so reusing it (rather than constructing a fresh Ticker per helper)
+    is what keeps this at one network call per distinct piece of data
+    instead of two.
+    """
     info = ticker.info or {}
     metrics = {"Ticker": symbol}
     for label, key in METRIC_FIELDS.items():
         metrics[label] = info.get(key)
+
+    metrics["Free Cash Flow Growth (YoY)"] = _fcf_growth_yoy(ticker)
+    metrics["EPS Growth (YoY)"] = _eps_growth_yoy(ticker)
+    metrics["Forward P/E Decline (%)"] = _forward_pe_decline(metrics)
+
+    health = compute_health_score(metrics)
+    metrics["Fundamental Health Score"] = health["score"] if health else None
+    metrics["Fundamental Health Rank"] = health["rank"] if health else None
+
     return metrics
+
+
+def fetch_fundamental_metrics(symbol: str) -> Dict[str, Any]:
+    """
+    Standalone convenience wrapper around _build_metrics() for a symbol on
+    its own — constructs its own Ticker. Unlike Alpha Vantage's
+    EARNINGS_CALENDAR, yfinance has no multi-ticker batch endpoint, so
+    none of this can be combined across symbols the way Tier 1's
+    NEWS_SENTIMENT call is.
+    """
+    return _build_metrics(yf.Ticker(symbol), symbol)
 
 
 def _next_earnings_date(ticker: "yf.Ticker"):
@@ -155,10 +287,7 @@ def fetch_and_store_metrics(symbol: str, dirty_reason: str = "") -> Fundamentals
     lazy on-demand fetch when it finds no cached row at all.
     """
     ticker = yf.Ticker(symbol)
-    info = ticker.info or {}
-    metrics = {"Ticker": symbol}
-    for label, key in METRIC_FIELDS.items():
-        metrics[label] = info.get(key)
+    metrics = _build_metrics(ticker, symbol)
 
     final = Fundamentals(
         symbol=symbol,

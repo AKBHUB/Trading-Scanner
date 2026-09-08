@@ -265,7 +265,13 @@ with tab_fundamentals:
             st.success(f"Refreshed {count} of {len(effective_fund_watchlist)} symbol(s).")
 
     st.divider()
-    st.subheader("Latest fundamentals per symbol")
+    st.subheader("Fundamental health ranking")
+    st.caption(
+        "Ranked by Fundamental Health Score — an equal-weighted average of Free "
+        "Cash Flow Growth, EPS Growth, Revenue Growth, Quarterly Earnings Growth, "
+        "and Forward P/E Decline (a factor missing for a symbol is excluded and "
+        "the rest renormalized, not treated as zero)."
+    )
     with get_session() as session:
         rows = session.query(Fundamentals).order_by(Fundamentals.fetched_at.desc()).all()
 
@@ -276,6 +282,34 @@ with tab_fundamentals:
     if not latest_by_symbol:
         st.info("No fundamentals fetched yet — use \"Quick refresh\" above.")
     else:
+        ranked = sorted(
+            latest_by_symbol.values(),
+            key=lambda f: (f.metrics or {}).get("Fundamental Health Score") if (f.metrics or {}).get(
+                "Fundamental Health Score"
+            ) is not None else float("-inf"),
+            reverse=True,
+        )
+        st.dataframe(
+            [
+                {
+                    "rank": i + 1,
+                    "symbol": f.symbol,
+                    "health_score": (f.metrics or {}).get("Fundamental Health Score"),
+                    "health_rank": (f.metrics or {}).get("Fundamental Health Rank"),
+                    "fcf_growth_yoy": (f.metrics or {}).get("Free Cash Flow Growth (YoY)"),
+                    "eps_growth_yoy": (f.metrics or {}).get("EPS Growth (YoY)"),
+                    "revenue_growth_yoy": (f.metrics or {}).get("Revenue Growth (YoY)"),
+                    "earnings_growth_yoy": (f.metrics or {}).get("Quarterly Earnings Growth (YoY)"),
+                    "forward_pe_decline_pct": (f.metrics or {}).get("Forward P/E Decline (%)"),
+                    "fetched_at": f.fetched_at,
+                }
+                for i, f in enumerate(ranked)
+            ],
+            use_container_width=True,
+        )
+
+        st.divider()
+        st.subheader("All metrics per symbol")
         st.dataframe(
             [
                 {
