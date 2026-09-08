@@ -52,6 +52,9 @@ METRIC_FIELDS = {
     "Quarterly Earnings Growth (YoY)": "earningsGrowth",
     "Profit Margin": "profitMargins",
     "Operating Margin": "operatingMargins",
+    "EPS (Trailing)": "trailingEps",
+    "EPS (Forward)": "forwardEps",
+    "Free Cash Flow": "freeCashflow",
 }
 
 
