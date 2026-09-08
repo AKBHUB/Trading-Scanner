@@ -222,3 +222,16 @@ class FinalSignal(Base):
     # Filled in later once the trade plays out, to power weight-tuning:
     outcome_checked_at = Column(DateTime, nullable=True)
     outcome_correct = Column(Boolean, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Runtime config — lets the frontend change parameters (watchlist, tier
+# cadences) without a redeploy. Seeded from config/schedule.yaml on first
+# read; see store/config_store.py.
+# ---------------------------------------------------------------------------
+class AppConfig(Base):
+    __tablename__ = "app_config"
+
+    key = Column(String, primary_key=True)
+    value = Column(JSON, nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
