@@ -28,9 +28,10 @@ import streamlit as st
 from agents import fundamental, macro, sentiment, technical
 from ingestion import daily_reference, fundamentals, news_sentiment, technical_core
 from ingestion.scheduler import start_scheduler_background
+from orchestrator import composite
 from store.config_store import get_config, set_config
 from store.db import get_session, init_db
-from store.models import AgentSignal, CongressTrade
+from store.models import AgentSignal, CongressTrade, FinalSignal
 
 init_db()
 
@@ -52,7 +53,7 @@ with st.sidebar:
         next_run = job.next_run_time.strftime("%Y-%m-%d %H:%M %Z") if job.next_run_time else "—"
         st.caption(f"{job.func.__name__}: next run {next_run}")
 
-tab_config, tab_run, tab_signals = st.tabs(["Watchlist & Schedule", "Run Now", "Recent Signals"])
+tab_config, tab_run, tab_signals = st.tabs(["Watchlist & Schedule", "Run Now", "Signals"])
 
 # ---------------------------------------------------------------------------
 # Watchlist & schedule
@@ -207,13 +208,61 @@ with tab_run:
         if run_macro:
             with st.spinner(f"Analyzing {symbol}..."):
                 macro.analyze(symbol, index_watchlist)
-            st.success("Done — see Recent Signals tab.")
+            st.success("Done — see Signals tab.")
+
+        st.caption("Or run all four and combine them into one weighted call:")
+        if st.button("Run all agents + compute composite", type="primary"):
+            if not symbol:
+                st.warning("Enter or select a symbol above first.")
+            else:
+                with st.spinner(f"Running all four agents for {symbol}..."):
+                    technical.analyze(symbol)
+                    fundamental.analyze(symbol)
+                    sentiment.analyze(symbol)
+                    macro.analyze(symbol, index_watchlist)
+                    final = composite.compute_composite(symbol)
+                if final is None:
+                    st.error("No usable agent signal to combine — every agent came back unavailable.")
+                else:
+                    st.success(
+                        f"Composite for {symbol}: **{final.direction.upper()}** "
+                        f"(confidence {final.confidence:.2f}, score {final.composite_score:+.2f}) — see Signals tab."
+                    )
+                    st.json(final.contributing_agents)
 
 # ---------------------------------------------------------------------------
-# Recent signals
+# Signals — composite call per symbol, plus raw per-agent detail
 # ---------------------------------------------------------------------------
 with tab_signals:
-    st.subheader("Recent agent signals")
+    st.subheader("Composite signal (latest per symbol)")
+    with get_session() as session:
+        final_rows = session.query(FinalSignal).order_by(FinalSignal.run_at.desc()).all()
+
+    latest_final_by_symbol = {}
+    for row in final_rows:
+        latest_final_by_symbol.setdefault(row.symbol, row)
+
+    if not latest_final_by_symbol:
+        st.info("No composite signals yet — use \"Run all agents + compute composite\" in the Run Now tab.")
+    else:
+        st.dataframe(
+            [
+                {
+                    "symbol": f.symbol,
+                    "direction": f.direction,
+                    "confidence": round(f.confidence, 3),
+                    "composite_score": round(f.composite_score, 3) if f.composite_score is not None else None,
+                    "contributing_agents": f.contributing_agents,
+                    "skill": f.skill_name,
+                    "run_at": f.run_at,
+                }
+                for f in latest_final_by_symbol.values()
+            ],
+            use_container_width=True,
+        )
+
+    st.divider()
+    st.subheader("Per-agent signal detail")
     with get_session() as session:
         rows = session.query(AgentSignal).order_by(AgentSignal.run_at.desc()).limit(50).all()
 
