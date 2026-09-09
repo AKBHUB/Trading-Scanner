@@ -84,6 +84,27 @@ _HEALTH_RANK_BANDS = [
     (-0.35, "Somewhat Weak"),
 ]
 
+# Standard market-cap tiers. The user's spec repeated "Micro" for both the
+# $50mn-$300mn band and "less than $50mn" — that's the standard finance
+# convention's Micro/Nano split with the Nano label just missing, so this
+# uses Nano for the bottom band rather than two tiers both called Micro.
+_MARKET_CAP_TIERS = [
+    (200_000_000_000, "Mega"),
+    (10_000_000_000, "Large"),
+    (2_000_000_000, "Mid"),
+    (300_000_000, "Small"),
+    (50_000_000, "Micro"),
+]
+
+
+def _market_cap_tier(market_cap: Optional[float]) -> Optional[str]:
+    if market_cap is None:
+        return None
+    for threshold, label in _MARKET_CAP_TIERS:
+        if market_cap >= threshold:
+            return label
+    return "Nano"
+
 
 def _yoy_growth(series: "pd.Series") -> Optional[float]:
     """
@@ -180,6 +201,7 @@ def _build_metrics(ticker: "yf.Ticker", symbol: str) -> Dict[str, Any]:
     for label, key in METRIC_FIELDS.items():
         metrics[label] = info.get(key)
 
+    metrics["Market Cap Tier"] = _market_cap_tier(metrics.get("Market Capitalization"))
     metrics["Free Cash Flow Growth (YoY)"] = _fcf_growth_yoy(ticker)
     metrics["EPS Growth (YoY)"] = _eps_growth_yoy(ticker)
     metrics["Forward P/E Decline (%)"] = _forward_pe_decline(metrics)
@@ -189,6 +211,94 @@ def _build_metrics(ticker: "yf.Ticker", symbol: str) -> Dict[str, Any]:
     metrics["Fundamental Health Rank"] = health["rank"] if health else None
 
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# Display formatting — the stored `metrics` values stay raw (full-precision
+# floats) since agents/fundamental.py's prompt wants those, not strings.
+# This layer is purely for rendering: percentages for growth/margin rates,
+# "x" ratios for P/E-style multiples, short-scale currency for large
+# dollar figures, plain currency for per-share values, and "pts" for the
+# composite health score (same 0-100ish scale as a percentage, labeled
+# differently since it's a blended index rather than one real growth rate).
+# ---------------------------------------------------------------------------
+
+
+def _fmt_currency_short(value: Optional[float]) -> Optional[str]:
+    if value is None:
+        return None
+    sign, value = ("-", -value) if value < 0 else ("", value)
+    for threshold, suffix in [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")]:
+        if value >= threshold:
+            return f"{sign}${value / threshold:.2f}{suffix}"
+    return f"{sign}${value:.2f}"
+
+
+def _fmt_currency(value: Optional[float]) -> Optional[str]:
+    return f"${value:,.2f}" if value is not None else None
+
+
+def _fmt_ratio(value: Optional[float]) -> Optional[str]:
+    return f"{value:.2f}x" if value is not None else None
+
+
+def _fmt_plain(value: Optional[float]) -> Optional[str]:
+    return f"{value:.2f}" if value is not None else None
+
+
+def _fmt_percent(value: Optional[float]) -> Optional[str]:
+    """For fields already expressed as a 0-1 fraction (growth rates, margins)."""
+    return f"{value * 100:.1f}%" if value is not None else None
+
+
+def _fmt_percent_already(value: Optional[float]) -> Optional[str]:
+    """For fields yfinance already returns in percentage-point units — verified
+    live against dividendYield (T=4.32, VZ=5.64: real yields, not 0-1 fractions
+    that would imply 432%/564%)."""
+    return f"{value:.2f}%" if value is not None else None
+
+
+def _fmt_points(value: Optional[float]) -> Optional[str]:
+    return f"{value * 100:.1f} pts" if value is not None else None
+
+
+# Field label -> formatter. None means the field is already display-ready
+# text (a tier or rank label) and passes through unchanged.
+FIELD_FORMATTERS = {
+    "Market Capitalization": _fmt_currency_short,
+    "Market Cap Tier": None,
+    "Trailing P/E": _fmt_ratio,
+    "Forward P/E": _fmt_ratio,
+    "Price-to-Book (P/B)": _fmt_ratio,
+    "Beta (5Y Monthly)": _fmt_plain,
+    "Dividend Yield": _fmt_percent_already,
+    "Revenue Growth (YoY)": _fmt_percent,
+    "Quarterly Earnings Growth (YoY)": _fmt_percent,
+    "Profit Margin": _fmt_percent,
+    "Operating Margin": _fmt_percent,
+    "EPS (Trailing)": _fmt_currency,
+    "EPS (Forward)": _fmt_currency,
+    "Free Cash Flow": _fmt_currency_short,
+    "Free Cash Flow Growth (YoY)": _fmt_percent,
+    "EPS Growth (YoY)": _fmt_percent,
+    "Forward P/E Decline (%)": _fmt_percent,
+    "Fundamental Health Score": _fmt_points,
+    "Fundamental Health Rank": None,
+}
+
+
+def format_metrics_for_display(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    """Formatted-for-display copy of a metrics dict — percentages, ratios,
+    short-scale currency, points — per FIELD_FORMATTERS. Used by the
+    dashboard; the stored/prompted `metrics` dict itself stays raw."""
+    formatted = {}
+    for key, value in metrics.items():
+        if key == "Ticker":
+            formatted[key] = value
+            continue
+        formatter = FIELD_FORMATTERS.get(key)
+        formatted[key] = formatter(value) if formatter else value
+    return formatted
 
 
 def fetch_fundamental_metrics(symbol: str) -> Dict[str, Any]:

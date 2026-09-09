@@ -282,11 +282,13 @@ with tab_fundamentals:
     if not latest_by_symbol:
         st.info("No fundamentals fetched yet — use \"Quick refresh\" above.")
     else:
+        # Sort by the raw score (None sorts last), then format for display —
+        # formatted strings like "22.6 pts" don't sort correctly as text.
         ranked = sorted(
             latest_by_symbol.values(),
-            key=lambda f: (f.metrics or {}).get("Fundamental Health Score") if (f.metrics or {}).get(
-                "Fundamental Health Score"
-            ) is not None else float("-inf"),
+            key=lambda f: (f.metrics or {}).get("Fundamental Health Score")
+            if (f.metrics or {}).get("Fundamental Health Score") is not None
+            else float("-inf"),
             reverse=True,
         )
         st.dataframe(
@@ -294,27 +296,39 @@ with tab_fundamentals:
                 {
                     "rank": i + 1,
                     "symbol": f.symbol,
-                    "health_score": (f.metrics or {}).get("Fundamental Health Score"),
-                    "health_rank": (f.metrics or {}).get("Fundamental Health Rank"),
-                    "fcf_growth_yoy": (f.metrics or {}).get("Free Cash Flow Growth (YoY)"),
-                    "eps_growth_yoy": (f.metrics or {}).get("EPS Growth (YoY)"),
-                    "revenue_growth_yoy": (f.metrics or {}).get("Revenue Growth (YoY)"),
-                    "earnings_growth_yoy": (f.metrics or {}).get("Quarterly Earnings Growth (YoY)"),
-                    "forward_pe_decline_pct": (f.metrics or {}).get("Forward P/E Decline (%)"),
+                    "health_score": fmt.get("Fundamental Health Score"),
+                    "health_rank": fmt.get("Fundamental Health Rank"),
+                    "market_cap": fmt.get("Market Capitalization"),
+                    "market_cap_tier": fmt.get("Market Cap Tier"),
+                    "fcf_growth_yoy": fmt.get("Free Cash Flow Growth (YoY)"),
+                    "eps_growth_yoy": fmt.get("EPS Growth (YoY)"),
+                    "revenue_growth_yoy": fmt.get("Revenue Growth (YoY)"),
+                    "earnings_growth_yoy": fmt.get("Quarterly Earnings Growth (YoY)"),
+                    "forward_pe_decline_pct": fmt.get("Forward P/E Decline (%)"),
                     "fetched_at": f.fetched_at,
                 }
                 for i, f in enumerate(ranked)
+                for fmt in [fundamentals.format_metrics_for_display(f.metrics or {})]
             ],
             use_container_width=True,
         )
 
         st.divider()
         st.subheader("All metrics per symbol")
+        st.caption(
+            "Formatted for display — percentages for growth/margin rates, "
+            "\"x\" for P/E-style ratios, short-scale currency for large "
+            "dollar figures, points for the composite health score."
+        )
         st.dataframe(
             [
                 {
                     "symbol": f.symbol,
-                    **{k: v for k, v in (f.metrics or {}).items() if k != "Ticker"},
+                    **{
+                        k: v
+                        for k, v in fundamentals.format_metrics_for_display(f.metrics or {}).items()
+                        if k != "Ticker"
+                    },
                     "next_earnings": f.valid_until,
                     "fetched_at": f.fetched_at,
                     "dirty_reason": f.dirty_reason,
