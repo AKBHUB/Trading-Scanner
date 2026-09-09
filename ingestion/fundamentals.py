@@ -58,6 +58,13 @@ METRIC_FIELDS = {
     "EPS (Trailing)": "trailingEps",
     "EPS (Forward)": "forwardEps",
     "Free Cash Flow": "freeCashflow",
+    "PEG Ratio": "pegRatio",
+    # "Return on Investment" isn't a single standard yfinance field — using
+    # Return on Equity, the closest match to what retail investors usually
+    # mean by "ROI" for a stock (return on invested capital would need its
+    # own build from the financial statements; ROE is what's directly
+    # available). Labeled explicitly so this interpretation is visible.
+    "Return on Investment (ROE)": "returnOnEquity",
 }
 
 # The five factors the fundamental health score ranks on, and where each
@@ -164,6 +171,85 @@ def _forward_pe_decline(metrics: Dict[str, Any]) -> Optional[float]:
     return (trailing - forward) / trailing
 
 
+def _forward_pe_health(decline: Optional[float]) -> Optional[str]:
+    """Healthy when forward P/E sits below trailing P/E (the market expects
+    enough earnings growth ahead to compress the multiple); Not Healthy
+    when it's flat or rising."""
+    if decline is None:
+        return None
+    return "Healthy" if decline > 0 else "Not Healthy"
+
+
+# Reuses the same neutral-band shape as _HEALTH_RANK_BANDS, with
+# trend-appropriate wording — this labels a *trajectory* (Free Cash Flow
+# Trend), not a bullish/bearish call, so "Uptrend"/"Downtrend" reads more
+# naturally here than "Strong"/"Weak".
+_TREND_BANDS = [
+    (0.35, "Strong Uptrend"),
+    (0.15, "Uptrend"),
+    (-0.15, "Flat"),
+    (-0.35, "Downtrend"),
+]
+
+
+def _trend_label(growth: Optional[float]) -> Optional[str]:
+    if growth is None:
+        return None
+    return next((label for threshold, label in _TREND_BANDS if growth >= threshold), "Strong Downtrend")
+
+
+# PEG < 1: earnings growth outpaces what the price implies (undervalued).
+# PEG > 1: price has run ahead of growth (overvalued). A small band around
+# 1.0 reads as fair value rather than requiring an exact match. PEG is
+# meaningless (not just "high" or "low") when growth is zero or negative,
+# since the ratio's denominator loses its meaning — flagged separately
+# rather than forced into one of the three valuation buckets.
+_PEG_UNDERVALUED_MAX = 0.9
+_PEG_OVERVALUED_MIN = 1.1
+
+
+def _peg_valuation(peg: Optional[float]) -> Optional[str]:
+    if peg is None or peg <= 0:
+        return "Not Meaningful"
+    if peg < _PEG_UNDERVALUED_MAX:
+        return "Undervalued"
+    if peg > _PEG_OVERVALUED_MIN:
+        return "Overvalued"
+    return "Fair Value"
+
+
+def _fcf_vs_net_income(fcf: Optional[float], net_income: Optional[float]) -> Optional[float]:
+    """How much of reported Net Income actually shows up as cash — a ratio
+    well below 1 is a quality-of-earnings flag (profits not converting to
+    cash); at or above 1 means cash generation is keeping pace with or
+    exceeding the reported accounting profit."""
+    if not fcf or not net_income:
+        return None
+    return fcf / net_income
+
+
+def _capex_vs_revenue(ticker: "yf.Ticker", total_revenue: Optional[float]) -> Optional[float]:
+    """Trailing-twelve-month Capital Expenditure (summed over the most
+    recent 4 quarters — yfinance reports it as a negative outflow, hence
+    abs()) as a fraction of TTM revenue. Requires a full 4 quarters on
+    record; returns None rather than understating the ratio from a
+    partial-year sum."""
+    if not total_revenue:
+        return None
+    try:
+        qcf = ticker.quarterly_cashflow
+        if qcf is None or "Capital Expenditure" not in qcf.index:
+            return None
+        capex_series = qcf.loc["Capital Expenditure"].dropna()
+        if len(capex_series) < 4:
+            return None
+        ttm_capex = capex_series.iloc[:4].sum()
+        return abs(ttm_capex) / total_revenue
+    except Exception as e:
+        logger.debug("quarterly_cashflow (capex) failed: %s: %s", type(e).__name__, e)
+        return None
+
+
 def compute_health_score(metrics: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Equal-weighted average of the five HEALTH_SCORE_FACTORS already present
@@ -202,9 +288,22 @@ def _build_metrics(ticker: "yf.Ticker", symbol: str) -> Dict[str, Any]:
         metrics[label] = info.get(key)
 
     metrics["Market Cap Tier"] = _market_cap_tier(metrics.get("Market Capitalization"))
-    metrics["Free Cash Flow Growth (YoY)"] = _fcf_growth_yoy(ticker)
+
+    fcf_growth = _fcf_growth_yoy(ticker)
+    metrics["Free Cash Flow Growth (YoY)"] = fcf_growth
+    metrics["Free Cash Flow Trend"] = _trend_label(fcf_growth)
+
     metrics["EPS Growth (YoY)"] = _eps_growth_yoy(ticker)
-    metrics["Forward P/E Decline (%)"] = _forward_pe_decline(metrics)
+
+    forward_pe_decline = _forward_pe_decline(metrics)
+    metrics["Forward P/E Decline (%)"] = forward_pe_decline
+    metrics["Forward P/E Health"] = _forward_pe_health(forward_pe_decline)
+
+    metrics["Free Cash Flow Vs. Net Income"] = _fcf_vs_net_income(
+        metrics.get("Free Cash Flow"), info.get("netIncomeToCommon")
+    )
+    metrics["Capex Vs Revenue"] = _capex_vs_revenue(ticker, info.get("totalRevenue"))
+    metrics["PEG Valuation"] = _peg_valuation(metrics.get("PEG Ratio"))
 
     health = compute_health_score(metrics)
     metrics["Fundamental Health Score"] = health["score"] if health else None
@@ -280,8 +379,15 @@ FIELD_FORMATTERS = {
     "EPS (Forward)": _fmt_currency,
     "Free Cash Flow": _fmt_currency_short,
     "Free Cash Flow Growth (YoY)": _fmt_percent,
+    "Free Cash Flow Trend": None,
+    "Free Cash Flow Vs. Net Income": _fmt_ratio,
+    "Capex Vs Revenue": _fmt_percent,
     "EPS Growth (YoY)": _fmt_percent,
     "Forward P/E Decline (%)": _fmt_percent,
+    "Forward P/E Health": None,
+    "PEG Ratio": _fmt_plain,
+    "PEG Valuation": None,
+    "Return on Investment (ROE)": _fmt_percent,
     "Fundamental Health Score": _fmt_points,
     "Fundamental Health Rank": None,
 }
