@@ -178,7 +178,12 @@ with tab_run:
 
     st.divider()
     st.subheader("Agents")
-    symbol = st.selectbox("Symbol", watchlist) if watchlist else st.text_input("Symbol")
+    # .strip().upper(): the watchlist-derived symbols are already uppercase
+    # (set_config normalizes them on save), but this free-text fallback —
+    # used whenever no watchlist is set — wasn't, so a manually-typed
+    # lowercase symbol would create separate, inconsistent store rows from
+    # the uppercase ones every other tier/agent writes.
+    symbol = st.selectbox("Symbol", watchlist) if watchlist else st.text_input("Symbol").strip().upper()
 
     a1, a2, a3, a4 = st.columns(4)
     # Buttons must always render regardless of whether `symbol` is set —
@@ -305,6 +310,9 @@ with tab_fundamentals:
                     "revenue_growth_yoy": fmt.get("Revenue Growth (YoY)"),
                     "earnings_growth_yoy": fmt.get("Quarterly Earnings Growth (YoY)"),
                     "forward_pe_decline_pct": fmt.get("Forward P/E Decline (%)"),
+                    "forward_pe_health": fmt.get("Forward P/E Health"),
+                    "peg_ratio": fmt.get("PEG Ratio"),
+                    "peg_valuation": fmt.get("PEG Valuation"),
                     "fetched_at": f.fetched_at,
                 }
                 for i, f in enumerate(ranked)
@@ -318,7 +326,10 @@ with tab_fundamentals:
         st.caption(
             "Formatted for display — percentages for growth/margin rates, "
             "\"x\" for P/E-style ratios, short-scale currency for large "
-            "dollar figures, points for the composite health score."
+            "dollar figures, points for the composite health score. "
+            "Free Cash Flow Growth (YoY) is shown as Free Cash Flow Trend "
+            "here — the raw % still feeds the health score and appears in "
+            "the ranking table above."
         )
         st.dataframe(
             [
@@ -327,7 +338,7 @@ with tab_fundamentals:
                     **{
                         k: v
                         for k, v in fundamentals.format_metrics_for_display(f.metrics or {}).items()
-                        if k != "Ticker"
+                        if k not in ("Ticker", "Free Cash Flow Growth (YoY)")
                     },
                     "next_earnings": f.valid_until,
                     "fetched_at": f.fetched_at,
