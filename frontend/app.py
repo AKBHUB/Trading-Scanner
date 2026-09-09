@@ -318,7 +318,7 @@ with tab_fundamentals:
                 for i, f in enumerate(ranked)
                 for fmt in [fundamentals.format_metrics_for_display(f.metrics or {})]
             ],
-            use_container_width=True,
+            width="stretch",
         )
 
         st.divider()
@@ -346,7 +346,7 @@ with tab_fundamentals:
                 }
                 for f in sorted(latest_by_symbol.values(), key=lambda f: f.symbol)
             ],
-            use_container_width=True,
+            width="stretch",
         )
 
 # ---------------------------------------------------------------------------
@@ -383,7 +383,7 @@ with tab_signals:
                 }
                 for f in sorted(latest_final_by_key.values(), key=lambda f: (f.symbol, f.skill_name))
             ],
-            use_container_width=True,
+            width="stretch",
         )
 
     st.divider()
@@ -407,5 +407,5 @@ with tab_signals:
                 }
                 for r in rows
             ],
-            use_container_width=True,
+            width="stretch",
         )
