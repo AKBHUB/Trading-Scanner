@@ -8,6 +8,7 @@ this agent makes no API calls of its own.
 from datetime import datetime, timedelta
 
 from agents.base import call_claude, persist_signal
+from ingestion.sentiment_rubric import evaluate
 from store.db import get_session
 from store.models import CongressTrade, InsiderTransaction, InstitutionalHolding, NewsSentiment
 
@@ -16,6 +17,9 @@ You are a sentiment and positioning agent. You're given today's news
 sentiment for a symbol, plus recent insider transactions, congressional
 trades, and institutional holding changes. Judge whether the combined
 sentiment/positioning picture favors higher or lower prices.
+
+Use the supplied three-row Market Sentiment & Flow rubric as a structured
+prior. Its score ranges from -3 to +3; explain which rows drove the result.
 """
 
 
@@ -54,13 +58,17 @@ def analyze(symbol: str) -> None:
         persist_signal(symbol, "sentiment", None, available=False)
         return
 
+    rubric = evaluate(news, insider, congress, institutional)
+
     summary = (
         f"Symbol: {symbol}\n"
         f"Today's news sentiment scores: {[n.sentiment_score for n in news]}\n"
         f"Headlines: {[n.headline for n in news]}\n"
         f"Recent insider transactions: {[(i.transaction_type, i.shares) for i in insider]}\n"
         f"Recent congress trades: {[(c.transaction_type, c.amount_range) for c in congress]}\n"
-        f"Recent institutional holding changes (%): {[i.change_pct for i in institutional]}"
+        f"Recent institutional holding changes (%): {[i.change_pct for i in institutional]}\n"
+        f"Market Sentiment & Flow rubric score: {rubric.score}/{rubric.maximum}\n"
+        f"Rubric rows: {rubric.rows}"
     )
 
     try:

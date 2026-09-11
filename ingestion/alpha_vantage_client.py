@@ -72,6 +72,9 @@ def call(function: str, *, max_retries: int = 3, **params: Any) -> dict:
     like missing data entitlements (e.g. INDEX_DATA, REALTIME_OPTIONS),
     which retrying will never fix.
     """
+    if not API_KEY:
+        raise AlphaVantageError("ALPHA_VANTAGE_API_KEY is not set")
+
     query = {"function": function, "apikey": API_KEY, **params}
 
     for attempt in range(1, max_retries + 1):
@@ -103,6 +106,9 @@ def call_csv(function: str, *, max_retries: int = 3, **params: Any) -> List[dict
     .json() on one of these raises a confusing JSONDecodeError rather than
     a clear error, so those endpoints must go through this function instead.
     """
+    if not API_KEY:
+        raise AlphaVantageError("ALPHA_VANTAGE_API_KEY is not set")
+
     query = {"function": function, "apikey": API_KEY, **params}
 
     for attempt in range(1, max_retries + 1):

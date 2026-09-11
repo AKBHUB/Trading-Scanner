@@ -9,10 +9,18 @@ market data provider directly — it only reads from `store/`.
 
 | Tier | Cadence | Data | Store table(s) |
 |---|---|---|---|
-| 1 | Interval, configurable start/end time | News & sentiment | `news_sentiment` |
-| 2 | Once daily, per-job scheduled time | Insider transactions, congress trades, politician metadata, institutional holdings | `insider_transactions`, `congress_trades`, `politician_metadata`, `institutional_holdings` |
-| 3 | Event-triggered (earnings calendar or corporate-action watcher) | Fundamentals | `fundamentals`, `corporate_action_flags` |
-| 4 | Interval, market hours | Technical indicators, core OHLCV, index, options | `technical_snapshots`, `index_snapshots`, `option_snapshots` |
+| 1 | Daily at the configured extraction time | Fundamental extraction for the stock watchlist | `fundamentals`, `corporate_action_flags` |
+| 2 | Frequent interval, configurable start/end time | News & sentiment | `news_sentiment` |
+| 3 | Once daily, per-job scheduled time | High-value insider transactions, congress trades, politician metadata, institutional holdings | `insider_transactions`, `congress_trades`, `politician_metadata`, `institutional_holdings` |
+| 4 | Daily baseline plus Tier 2/3 catalyst events | Technical indicators, core OHLCV, index, options | `technical_snapshots`, `index_snapshots`, `option_snapshots` |
+
+Daily reference ingestion applies configurable minimum-value filters before
+writing insider, congressional, or institutional rows. Small transactions are
+discarded rather than passed to the sentiment agent. The news workflow also
+produces a deterministic three-row Market Sentiment & Flow rubric covering
+news catalysts, insider/institutional flow, and macro/topic alignment.
+Tier 4 stores a corresponding rubric covering technical trend,
+intraday momentum/SMC, and options flow/volatility.
 
 ## Agent layer (`agents/`)
 

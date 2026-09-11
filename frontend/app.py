@@ -25,33 +25,82 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
+st.set_page_config(page_title="Trading Scanner", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+
 from agents import fundamental, macro, sentiment, technical
 from ingestion import daily_reference, fundamentals, news_sentiment, technical_core
 from ingestion.scheduler import start_scheduler_background
 from orchestrator import composite
 from store.config_store import get_config, set_config
 from store.db import get_session, init_db
-from store.models import AgentSignal, CongressTrade, FinalSignal, Fundamentals
+from store.models import AgentSignal, CongressTrade, FinalSignal, Fundamentals, NewsSentiment, TechnicalSnapshot
 
-init_db()
+st.markdown(
+    """
+    <style>
+    [data-testid="stAppViewContainer"] { background: #f5f7fb; }
+    [data-testid="stHeader"] { background: rgba(245,247,251,.92); }
+    .block-container { max-width: 1500px; padding-top: 2rem; }
+    .hero { background: linear-gradient(120deg, #102a43, #1f5f8b); color: white;
+            border-radius: 12px; padding: 1.35rem 1.6rem; margin-bottom: 1.1rem; }
+    .hero h1 { margin: 0; font-size: 2rem; letter-spacing: 0; }
+    .hero p { margin: .35rem 0 0; color: #d9ecff; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+startup_error = None
+try:
+    init_db()
+except Exception as exc:
+    startup_error = f"Database startup failed: {type(exc).__name__}: {exc}"
 
 # Starts the APScheduler loop in a background thread of this same process,
 # so this one Streamlit service both serves the dashboard and drives
 # scheduled ingestion — no separate worker process to deploy. Idempotent:
 # Streamlit reruns this whole script on every interaction, but the second
 # call onward just returns the already-running scheduler instance.
-_scheduler = start_scheduler_background()
+_scheduler = None
+if startup_error is None:
+    try:
+        _scheduler = start_scheduler_background()
+    except Exception as exc:
+        startup_error = f"Scheduler startup failed: {type(exc).__name__}: {exc}"
 
-st.set_page_config(page_title="Trading-Scanner", layout="wide")
-st.title("Trading-Scanner")
+st.markdown(
+    '<section class="hero"><h1>Trading Scanner</h1><p>Market context, agent calls, and actionable signals in one operating view.</p></section>',
+    unsafe_allow_html=True,
+)
+
+if startup_error:
+    st.error(startup_error)
+    st.info("Fix the configuration shown above, then reload the app. The dashboard has not started background jobs.")
+
+news_count = technical_count = signal_count = 0
+if startup_error is None:
+    with get_session() as session:
+        news_count = session.query(NewsSentiment).count()
+        technical_count = session.query(TechnicalSnapshot).count()
+        signal_count = session.query(FinalSignal).count()
 
 with st.sidebar:
-    st.caption("Scheduler")
-    st.success("Running" if _scheduler.running else "Stopped")
-    jobs = sorted(_scheduler.get_jobs(), key=lambda j: j.next_run_time or datetime.max)
-    for job in jobs:
-        next_run = job.next_run_time.strftime("%Y-%m-%d %H:%M %Z") if job.next_run_time else "—"
-        st.caption(f"{job.func.__name__}: next run {next_run}")
+    st.subheader("System health")
+    if _scheduler is None:
+        st.error("Scheduler unavailable")
+    else:
+        st.success("Scheduler running" if _scheduler.running else "Scheduler stopped")
+        jobs = sorted(_scheduler.get_jobs(), key=lambda j: j.next_run_time or datetime.max)
+        for job in jobs:
+            next_run = job.next_run_time.strftime("%Y-%m-%d %H:%M %Z") if job.next_run_time else "—"
+            st.caption(f"{job.func.__name__}: {next_run}")
+
+watchlist = get_config("watchlist", [])
+metric_cols = st.columns(4)
+metric_cols[0].metric("Watchlist", len(watchlist), help="Symbols currently used by scheduled tiers.")
+metric_cols[1].metric("News rows", news_count)
+metric_cols[2].metric("Technical snapshots", technical_count)
+metric_cols[3].metric("Composite signals", signal_count)
 
 tab_config, tab_run, tab_fundamentals, tab_signals = st.tabs(
     ["Watchlist & Schedule", "Run Now", "Fundamentals", "Signals"]
@@ -79,19 +128,36 @@ with tab_config:
     tiers_cfg = get_config("tiers", {})
     news_cfg = tiers_cfg.get("news_sentiment", {})
     tech_cfg = tiers_cfg.get("technical_core", {})
+    fundamental_cfg = tiers_cfg.get("fundamentals", {})
     daily_cfg = tiers_cfg.get("daily_reference", {}).get("jobs", {})
+    reference_cfg = tiers_cfg.get("daily_reference", {})
 
     col1, col2 = st.columns(2)
     with col1:
+        fundamental_time = st.text_input(
+            "Tier 1 fundamental extraction (HH:MM)", value=fundamental_cfg.get("extraction_time", "06:30")
+        )
         news_interval = st.number_input(
             "News/sentiment interval (minutes)", min_value=5, value=int(news_cfg.get("interval_minutes", 30))
         )
         news_start = st.text_input("News window start (HH:MM)", value=news_cfg.get("start_time", "08:30"))
         news_end = st.text_input("News window end (HH:MM)", value=news_cfg.get("end_time", "15:15"))
     with col2:
-        tech_interval = st.number_input(
-            "Technical/core interval (minutes)", min_value=5, value=int(tech_cfg.get("interval_minutes", 15))
+        technical_time = st.text_input(
+            "Tier 4 baseline (HH:MM)", value=tech_cfg.get("baseline_time", "07:30")
         )
+
+    st.caption("High-volume daily reference filters (minimum transaction or holding value)")
+    f1, f2, f3 = st.columns(3)
+    insider_min = f1.number_input(
+        "Insider minimum ($)", min_value=0, value=int(reference_cfg.get("min_insider_transaction_value", 100000))
+    )
+    congress_min = f2.number_input(
+        "Congress minimum ($)", min_value=0, value=int(reference_cfg.get("min_congress_transaction_value", 15000))
+    )
+    institutional_min = f3.number_input(
+        "Institutional minimum ($)", min_value=0, value=int(reference_cfg.get("min_institutional_holding_value", 1000000))
+    )
 
     st.caption("Daily one-time job times (HH:MM)")
     d1, d2, d3, d4 = st.columns(4)
@@ -104,17 +170,28 @@ with tab_config:
         set_config(
             "tiers",
             {
+                "fundamentals": {
+                    "type": "daily",
+                    "extraction_time": fundamental_time,
+                    "watchlist_source": "watchlist",
+                },
                 "news_sentiment": {
                     "interval_minutes": news_interval,
                     "start_time": news_start,
                     "end_time": news_end,
                 },
                 "technical_core": {
-                    "interval_minutes": tech_interval,
+                    "type": "daily_plus_catalyst_event",
+                    "baseline_time": technical_time,
+                    "event_sources": ["news_sentiment", "daily_reference"],
                     "market_hours_only": True,
                     "includes": ["ohlcv", "indicators", "index", "options"],
                 },
                 "daily_reference": {
+                    "type": "daily",
+                    "min_insider_transaction_value": insider_min,
+                    "min_congress_transaction_value": congress_min,
+                    "min_institutional_holding_value": institutional_min,
                     "jobs": {
                         "insider_transactions": insider_time,
                         "congress_trades": congress_time,
@@ -162,18 +239,15 @@ with tab_run:
             politician_n = daily_reference.run_politician_metadata(bioguide_ids)
         st.success(f"Insider: {insider_n}, congress: {congress_n}, institutional: {holdings_n}, politicians: {politician_n}")
 
-    if c3.button("Run fundamentals watch"):
-        with st.spinner("Checking earnings calendar and M&A news triggers..."):
-            fundamentals.check_earnings_calendar_trigger(watchlist)
-            fundamentals.check_news_ma_trigger(watchlist, since=datetime.utcnow() - timedelta(hours=1))
-            count = fundamentals.refresh_flagged_symbols()
-        st.success(f"Refreshed {count} flagged symbols.")
+    if c3.button("Run Tier 1 fundamentals"):
+        with st.spinner("Extracting fundamentals for the watchlist..."):
+            count = fundamentals.refresh_all(watchlist)
+        st.success(f"Refreshed {count} watchlist symbol(s).")
 
     if c4.button("Run technical & core"):
         with st.spinner("Fetching technical indicators, OHLCV, index, options..."):
             technical_core.run_technical(watchlist)
             technical_core.run_index_data(index_watchlist)
-            technical_core.run_options(watchlist)
         st.success("Technical & core tier run complete.")
 
     st.divider()

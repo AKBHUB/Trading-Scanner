@@ -13,6 +13,9 @@ You are a technical analysis agent for swing trading. You're given the
 latest OHLCV bars and indicator values (RSI, MACD, EMA/SMA, Bollinger
 Bands, OBV, ADX) for one symbol. Judge whether the technical picture
 favors higher or lower prices over the next few days.
+
+Use the supplied Tier 4 rubric as a structured prior: technical trend,
+intraday momentum/SMC, and options flow/volatility.
 """
 
 
@@ -33,7 +36,8 @@ def analyze(symbol: str) -> None:
         f"Symbol: {symbol}\n"
         f"Timeframe: {snapshot.timeframe}\n"
         f"OHLCV: {snapshot.ohlcv}\n"
-        f"Indicators: {snapshot.indicators}"
+        f"Indicators: {snapshot.indicators}\n"
+        f"Tier 4 rubric: {(snapshot.indicators or {}).get('technical_rubric')}"
     )
 
     try:

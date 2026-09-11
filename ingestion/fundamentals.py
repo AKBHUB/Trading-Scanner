@@ -1,26 +1,25 @@
 """
-Tier 3 — event-triggered fundamentals, backed by yfinance instead of
+Tier 1 — scheduled fundamental extraction, backed by yfinance instead of
 Alpha Vantage. Nothing in this module calls Alpha Vantage anymore —
 EARNINGS_CALENDAR, EARNINGS, INCOME_STATEMENT, BALANCE_SHEET, and
 CASH_FLOW have all been replaced by `yfinance.Ticker`.
 
-Three ways a symbol's fundamentals get (re)fetched:
+Fundamentals are refreshed for the stock watchlist at the dedicated Tier 1
+schedule. A symbol can also be refreshed on demand by the fundamental agent.
+
+Two ways a symbol's fundamentals get (re)fetched:
 
   1. Event-triggered: its next earnings date has passed (yfinance's own
      `Ticker.calendar` / `Ticker.get_earnings_dates()`), or recent Tier-1
      news carries the M&A topic tag (reusing whatever Tier 1 already
      fetched — no extra call). Either flips a CorporateActionFlag,
      picked up by refresh_flagged_symbols() on its next scheduled pass.
-  2. Weekly safety-net refresh (config/schedule.yaml:
-     tiers.fundamentals.weekly_refresh) — force-refreshes every
-     candidate via refresh_all() regardless of dirty state, catching
-     anything the event triggers missed (e.g. a ticker where yfinance's
-     earnings-date field was temporarily missing).
-  3. Lazy, on-demand: agents/fundamental.py calls fetch_and_store_metrics()
+  2. Lazy, on-demand: agents/fundamental.py calls fetch_and_store_metrics()
      directly the first time it's asked to analyze a symbol with no
      Fundamentals row at all, instead of just reporting unavailable.
 
-Not wired up yet: the new_8k_filing trigger from config/schedule.yaml.
+The legacy event-trigger helpers remain available for future event-driven
+refreshes. Not wired up yet: the new_8k_filing trigger from config/schedule.yaml.
 That one comes from TradingView's filing tools, not yfinance or Alpha
 Vantage — add it as a third check_* function here once that connector
 exists.

@@ -10,6 +10,7 @@ machine — nothing in models.py or the rest of the app needs to change.
 import logging
 import os
 from contextlib import contextmanager
+from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
@@ -18,7 +19,8 @@ from store.models import Base
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./trading_scanner.db")
+_DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "trading_scanner.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{_DEFAULT_DB_PATH}")
 
 # check_same_thread only matters for SQLite; harmless to pass otherwise-ignored
 # kwargs, but keep it conditional for clarity.

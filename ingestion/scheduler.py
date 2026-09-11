@@ -20,7 +20,8 @@ behavior is identical either way.
 import logging
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
+from pathlib import Path
 
 import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -36,7 +37,9 @@ from store.models import CongressTrade
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-with open("config/schedule.yaml") as f:
+_SCHEDULE_PATH = Path(__file__).resolve().parent.parent / "config" / "schedule.yaml"
+
+with _SCHEDULE_PATH.open() as f:
     CONFIG = yaml.safe_load(f)
 
 # Fallback only — the dashboard's saved watchlist (store/config_store.py,
@@ -64,22 +67,35 @@ def _fundamentals_watchlist():
     return get_config("fundamentals_watchlist", []) or _watchlist()
 
 
+def job_fundamental_extraction():
+    count = fundamentals.refresh_all(_watchlist())
+    logger.info("fundamental_extraction: refreshed %d symbols", count)
+
+
 def job_news_sentiment():
+    since = datetime.utcnow()
     window = CONFIG["tiers"]["news_sentiment"]
     if not news_sentiment.within_window(window["start_time"], window["end_time"], tz=CONFIG["timezone"]):
         return
     count = news_sentiment.run(_watchlist())
     logger.info("news_sentiment: wrote %d rows", count)
+    refreshed = technical_core.refresh_on_catalyst(_watchlist(), since=since)
+    if refreshed:
+        logger.info("technical_core: refreshed %d symbols after news catalysts", refreshed)
 
 
 def job_insider_transactions():
+    since = datetime.utcnow()
     count = daily_reference.run_insider_transactions(_watchlist())
     logger.info("insider_transactions: wrote %d rows", count)
+    technical_core.refresh_on_catalyst(_watchlist(), since=since)
 
 
 def job_congress_trades():
+    since = datetime.utcnow()
     count = daily_reference.run_congress_trades(_watchlist())
     logger.info("congress_trades: wrote %d rows", count)
+    technical_core.refresh_on_catalyst(_watchlist(), since=since)
 
 
 def job_politician_metadata():
@@ -94,32 +110,17 @@ def job_politician_metadata():
 
 
 def job_institutional_holdings():
+    since = datetime.utcnow()
     count = daily_reference.run_institutional_holdings(_watchlist())
     logger.info("institutional_holdings: wrote %d rows", count)
+    technical_core.refresh_on_catalyst(_watchlist(), since=since)
 
 
-def job_fundamentals_watch():
-    watchlist = _fundamentals_watchlist()
-    fundamentals.check_earnings_calendar_trigger(watchlist)
-    fundamentals.check_news_ma_trigger(watchlist, since=datetime.utcnow() - timedelta(hours=1))
-    # new_8k_filing isn't wired up yet — that trigger comes from TradingView,
-    # not yfinance. Add a third check_* call here once that connector exists.
-    count = fundamentals.refresh_flagged_symbols()
-    if count:
-        logger.info("fundamentals: refreshed %d flagged symbols", count)
-
-
-def job_fundamentals_weekly_refresh():
-    count = fundamentals.refresh_all(_fundamentals_watchlist())
-    logger.info("fundamentals: weekly refresh updated %d symbols", count)
-
-
-def job_technical_core():
+def job_technical_baseline():
     watchlist = _watchlist()
     technical_core.run_technical(watchlist)
     technical_core.run_index_data(_index_watchlist())
-    technical_core.run_options(watchlist)
-    logger.info("technical_core: tier run complete")
+    logger.info("technical_core: daily baseline run complete")
 
 
 def job_swing_trade_scanner():
@@ -141,6 +142,9 @@ def build_scheduler() -> BackgroundScheduler:
     """Construct a scheduler with every tier's job added, not yet started."""
     scheduler = BackgroundScheduler(timezone=CONFIG["timezone"])
 
+    fundamentals_cfg = CONFIG["tiers"]["fundamentals"]
+    scheduler.add_job(job_fundamental_extraction, _cron_at(fundamentals_cfg["extraction_time"]))
+
     news_cfg = CONFIG["tiers"]["news_sentiment"]
     scheduler.add_job(job_news_sentiment, IntervalTrigger(minutes=news_cfg["interval_minutes"]))
 
@@ -150,20 +154,8 @@ def build_scheduler() -> BackgroundScheduler:
     scheduler.add_job(job_institutional_holdings, _cron_at(daily_cfg["institutional_holdings"]))
     scheduler.add_job(job_politician_metadata, _cron_at(daily_cfg["politician_metadata"]))
 
-    # Fundamentals watcher runs on the same cadence as news_sentiment —
-    # it's cheap since the M&A check reads the store, not the API.
-    scheduler.add_job(job_fundamentals_watch, IntervalTrigger(minutes=news_cfg["interval_minutes"]))
-
-    weekly_cfg = CONFIG["tiers"]["fundamentals"].get("weekly_refresh")
-    if weekly_cfg:
-        hour, minute = weekly_cfg["time"].split(":")
-        scheduler.add_job(
-            job_fundamentals_weekly_refresh,
-            CronTrigger(day_of_week=weekly_cfg["day_of_week"], hour=int(hour), minute=int(minute)),
-        )
-
     tech_cfg = CONFIG["tiers"]["technical_core"]
-    scheduler.add_job(job_technical_core, IntervalTrigger(minutes=tech_cfg["interval_minutes"]))
+    scheduler.add_job(job_technical_baseline, _cron_at(tech_cfg["baseline_time"]))
 
     skills_cfg = CONFIG.get("skills", {})
     if "swing_trade_scanner" in skills_cfg:
