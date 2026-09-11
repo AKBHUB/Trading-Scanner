@@ -199,7 +199,6 @@ with tab_config:
                         "politician_metadata": politician_time,
                     }
                 },
-                "fundamentals": tiers_cfg.get("fundamentals", {}),
             },
         )
         st.success("Saved — restart the worker service on Railway to apply new cadences.")
@@ -315,7 +314,10 @@ with tab_run:
 # Fundamentals — yfinance-backed metrics, its own ticker list + quick refresh
 # ---------------------------------------------------------------------------
 with tab_fundamentals:
-    st.subheader("Fundamentals ticker list")
+    with get_session() as session:
+        fundamentals_count = session.query(Fundamentals).count()
+
+    st.subheader(f"Fundamentals data ({fundamentals_count} snapshots)")
     st.caption(
         "Optional — separate from the main watchlist above. Leave empty to "
         "have the fundamentals tier (event-triggered + weekly safety-net "
