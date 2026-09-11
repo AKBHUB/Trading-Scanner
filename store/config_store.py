@@ -42,3 +42,12 @@ def set_config(key: str, value: Any) -> None:
             session.add(AppConfig(key=key, value=value))
         else:
             row.value = value
+
+
+def resolve_fundamentals_universe() -> list[str]:
+    """Resolve the fundamentals list using the configured fallback order."""
+    return (
+        get_config("fundamentals_watchlist", [])
+        or get_config("watchlist", [])
+        or get_config("index_universe", [])
+    )
