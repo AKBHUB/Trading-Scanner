@@ -1,0 +1,62 @@
+# Ingestion tier cadence and skill run schedule for Trading-Scanner.
+# All times are in the timezone given per section unless noted otherwise.
+
+timezone: "America/Chicago"
+
+tiers:
+  # Tier 1 — polls repeatedly through the trading day, accumulates in
+  # news_sentiment rather than overwriting.
+  news_sentiment:
+    type: interval
+    interval_minutes: 30
+    start_time: "08:30"
+    end_time: "15:15"
+
+  # Tier 2 — each job runs once per day at its own time. Staggered so they
+  # don't all hit Alpha Vantage in the same second.
+  daily_reference:
+    type: daily
+    jobs:
+      insider_transactions: "07:00"
+      congress_trades: "07:05"
+      institutional_holdings: "07:10"
+      # Politician metadata is near-static reference data. Kept on a daily
+      # schedule for now for uniformity; the cheaper long-term version is
+      # "fetch once per bioguide_id, refresh only on a cache miss" —
+      # revisit once the daily call volume matters.
+      politician_metadata: "07:15"
+
+  # Tier 3 — not time-based in what it checks for, but the check itself
+  # now runs once daily rather than on news_sentiment's 30-min cadence:
+  # whichever trigger fired since the last check marks the symbol dirty
+  # and that same run refreshes it. Backed by yfinance, not Alpha Vantage.
+  # A weekly force-refresh runs independently as a safety net for anything
+  # the event triggers missed (e.g. yfinance's earnings date was
+  # temporarily unavailable for a ticker).
+  fundamentals:
+    type: event
+    check_time: "08:00"
+    triggers:
+      - earnings_calendar_passed     # yfinance's next expected earnings date has passed since last snapshot
+      - news_topic: mergers_and_acquisitions   # Alpha Vantage NEWS_SENTIMENT topic tag (Tier 1 still uses Alpha Vantage)
+      - new_8k_filing                 # material-event SEC filing detected
+    weekly_refresh:
+      day_of_week: "mon"
+      time: "06:00"
+
+  # Tier 4 — technical indicators, core OHLCV, index data, and the options
+  # chain are all pulled together on the same interval.
+  technical_core:
+    type: interval
+    interval_minutes: 15
+    market_hours_only: true
+    includes: [ohlcv, indicators, index, options]
+
+# When the two existing skills run against whatever is currently in the store.
+skills:
+  swing_trade_scanner:
+    # placeholder cadence — adjust to your actual routine
+    cron: "0 8,12,15 * * 1-5"
+  catalyst_confluence_scanner:
+    # matches the existing 9:45 AM / 2:45 PM CT run times
+    cron: "45 9,14 * * 1-5"
