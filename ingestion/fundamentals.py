@@ -1,11 +1,10 @@
 """
-Tier 1 — scheduled fundamental extraction, backed by yfinance instead of
-Alpha Vantage. Nothing in this module calls Alpha Vantage anymore —
+Tier 1 — scheduled fundamental extraction, backed by yfinance.
 EARNINGS_CALENDAR, EARNINGS, INCOME_STATEMENT, BALANCE_SHEET, and
-CASH_FLOW have all been replaced by `yfinance.Ticker`.
+CASH_FLOW have all been fetched by `yfinance.Ticker`.
 
-Fundamentals are refreshed for the stock watchlist at the dedicated Tier 1
-schedule. A symbol can also be refreshed on demand by the fundamental agent.
+Fundamentals are refreshed for the stock watchlist daily pre-market session as per pre-defined schedule. 
+A symbol can also be refreshed on demand by the fundamental agent.
 
 Two ways a symbol's fundamentals get (re)fetched:
 
